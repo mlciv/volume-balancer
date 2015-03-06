@@ -6,6 +6,7 @@ import java.io.File;
 import java.io.FileFilter;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -25,13 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
-import org.apache.hadoop.hdfs.DFSUtil;
-import org.apache.hadoop.hdfs.HdfsConfiguration;
-import org.apache.hadoop.hdfs.NameNodeProxies;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.Util;
-import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
-import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.log4j.Logger;
 
 /**
@@ -154,11 +150,12 @@ public class VolumeBalancer {
         LOG.info("Threshold is " + threshold);
 
         // Hadoop *always* need a configuration :)
-        final HdfsConfiguration conf = new HdfsConfiguration();
+        final Configuration conf = new Configuration();
 
-        final String blockpoolID = getBlockPoolID(conf);
+        //for hadoop 1, no blockpool concept
+        //final String blockpoolID = getBlockPoolID(conf);
 
-        LOG.info("BlockPoolId is " + blockpoolID);
+        //LOG.info("BlockPoolId is " + blockpoolID);
 
         final Collection<URI> dataDirs = getStorageDirs(conf);
 
@@ -186,7 +183,7 @@ public class VolumeBalancer {
         // Ensure all finalized folders exists
         boolean dataDirError = false;
         for (Volume v : allVolumes) {
-            final File f = generateFinalizeDirInVolume(v, blockpoolID);
+            final File f = generateHadoopV1DirInVolume(v);
             if (!f.isDirectory()) {
                 if (!f.mkdirs()) {
                     LOG.error("Failed creating " + f + ". Please check configuration and permissions");
@@ -232,6 +229,7 @@ public class VolumeBalancer {
             LOG.debug("leastUsedVolume: " + leastUsedVolume + ", "
                 + (int) (leastUsedVolume.getPercentAvailableSpace() * 100) + "% usable");
 
+            // assuming the same Volume Size, percent
             totalPercentAvailable = totalPercentAvailable / dataDirs.size();
 
             // Check if the volume is balanced (i.e. between totalPercentAvailble +/- threshold)
@@ -242,7 +240,7 @@ public class VolumeBalancer {
                 break;
             }
 
-            final File finalizedLeastUsedBlockStorage = generateFinalizeDirInVolume(leastUsedVolume, blockpoolID);
+            final File finalizedLeastUsedBlockStorage = generateHadoopV1DirInVolume(leastUsedVolume);
 
             File leastUsedBlockSubdir = finalizedLeastUsedBlockStorage;
             
@@ -302,7 +300,7 @@ public class VolumeBalancer {
             LOG.debug("mostUsedVolume: " + mostUsedVolume + ", "
                 + (int) (mostUsedVolume.getPercentAvailableSpace() * 100) + "% usable");
 
-            File mostUsedBlockSubdir = generateFinalizeDirInVolume(mostUsedVolume, blockpoolID);
+            File mostUsedBlockSubdir = generateHadoopV1DirInVolume(mostUsedVolume);
 
             File tmpMostUsedBlockSubdir = null;
             do {
@@ -316,10 +314,12 @@ public class VolumeBalancer {
             /*
              * Generate the final name of the destination
              */
-            final File[] existingSubDirs = findSubdirs(leastUsedBlockSubdir);
+//            final File[] existingSubDirs = findSubdirs(leastUsedBlockSubdir);
+//
+//            final File finalLeastUsedBlockSubdir = new File(leastUsedBlockSubdir, DataStorage.BLOCK_SUBDIR_PREFIX
+//                + existingSubDirs.length);
 
-            final File finalLeastUsedBlockSubdir = new File(leastUsedBlockSubdir, DataStorage.BLOCK_SUBDIR_PREFIX
-                + existingSubDirs.length);
+            final File finalLeastUsedBlockSubdir = new File(leastUsedBlockSubdir, nextSubdir(leastUsedBlockSubdir, DataStorage.BLOCK_SUBDIR_PREFIX));
 
             /*
              * Schedule the two subdir for a move.
@@ -347,6 +347,31 @@ public class VolumeBalancer {
         shutdownLatch.countDown();
 
     }
+
+  private static String nextSubdir(File dir, final String subdirPrefix){
+    File[] existing = dir.listFiles(new FileFilter() {
+      @Override
+      public boolean accept(File pathname) {
+        return pathname.getName().startsWith(subdirPrefix);
+      }
+    });
+    if (existing == null || existing.length == 0)
+      return subdirPrefix + "0";
+
+    //  listFiles doesn't guarantee ordering
+    int lastIndex = -1;
+    for (int i = 0; i < existing.length; i++){
+      String name = existing[i].getName();
+      try{
+        int index = Integer.parseInt(name.substring(subdirPrefix.length()));
+        if (lastIndex < index)
+          lastIndex = index;
+      }catch(NumberFormatException e){
+        // ignore
+      }
+    }
+    return subdirPrefix + (lastIndex +1);
+  }
 
     private static File[] findSubdirs(File parent) {
         return parent.listFiles(new FileFilter() {
@@ -390,20 +415,24 @@ public class VolumeBalancer {
         return existingSubdirs.length < maxBlocksPerDir;
     }
     
-    private static String getBlockPoolID(Configuration conf) throws IOException {
+//    private static String getBlockPoolID(Configuration conf) throws IOException {
+//
+//        final Collection<URI> namenodeURIs = DFSUtil.getNsServiceRpcUris(conf);
+//        URI nameNodeUri = namenodeURIs.iterator().next();
+//
+//        final NamenodeProtocol namenode = NameNodeProxies.createProxy(conf, nameNodeUri, NamenodeProtocol.class)
+//            .getProxy();
+//        final NamespaceInfo namespaceinfo = namenode.versionRequest();
+//        return namespaceinfo.getBlockPoolID();
+//    }
 
-        final Collection<URI> namenodeURIs = DFSUtil.getNsServiceRpcUris(conf);
-        URI nameNodeUri = namenodeURIs.iterator().next();
+//    private static File generateFinalizeDirInVolume(Volume v, String blockpoolID) {
+//        return new File(new File(v.uri), Storage.STORAGE_DIR_CURRENT + "/" + blockpoolID + "/"
+//            + Storage.STORAGE_DIR_CURRENT + "/" + DataStorage.STORAGE_DIR_FINALIZED);
+//    }
 
-        final NamenodeProtocol namenode = NameNodeProxies.createProxy(conf, nameNodeUri, NamenodeProtocol.class)
-            .getProxy();
-        final NamespaceInfo namespaceinfo = namenode.versionRequest();
-        return namespaceinfo.getBlockPoolID();
-    }
-
-    private static File generateFinalizeDirInVolume(Volume v, String blockpoolID) {
-        return new File(new File(v.uri), Storage.STORAGE_DIR_CURRENT + "/" + blockpoolID + "/"
-            + Storage.STORAGE_DIR_CURRENT + "/" + DataStorage.STORAGE_DIR_FINALIZED);
+    private static File generateHadoopV1DirInVolume(Volume v) {
+      return new File(new File(v.uri), Storage.STORAGE_DIR_CURRENT + "/");
     }
 
     private static class WaitForProperShutdown extends Thread {
@@ -486,6 +515,76 @@ public class VolumeBalancer {
 
     static Collection<URI> getStorageDirs(Configuration conf) {
         Collection<String> dirNames = conf.getTrimmedStringCollection(DFS_DATANODE_DATA_DIR_KEY);
-        return Util.stringCollectionAsURIs(dirNames);
+        return stringCollectionAsURIs(dirNames);
     }
+
+  /**
+   * Interprets the passed string as a URI. In case of error it
+   * assumes the specified string is a file.
+   *
+   * @param s the string to interpret
+   * @return the resulting URI
+   * @throws IOException
+   */
+  public static URI stringAsURI(String s) throws IOException {
+    URI u = null;
+    // try to make a URI
+    try {
+      u = new URI(s);
+    } catch (URISyntaxException e){
+      LOG.error("Syntax error in URI " + s
+              + ". Please check hdfs configuration.", e);
+    }
+
+    // if URI is null or scheme is undefined, then assume it's file://
+    if(u == null || u.getScheme() == null){
+      LOG.warn("Path " + s + " should be specified as a URI "
+              + "in configuration files. Please update hdfs configuration.");
+      u = fileAsURI(new File(s));
+    }
+    return u;
+  }
+
+  /**
+   * Converts the passed File to a URI. This method trims the trailing slash if
+   * one is appended because the underlying file is in fact a directory that
+   * exists.
+   *
+   * @param f the file to convert
+   * @return the resulting URI
+   * @throws IOException
+   */
+  public static URI fileAsURI(File f) throws IOException {
+    URI u = f.getCanonicalFile().toURI();
+
+    // trim the trailing slash, if it's present
+    if (u.getPath().endsWith("/")) {
+      String uriAsString = u.toString();
+      try {
+        u = new URI(uriAsString.substring(0, uriAsString.length() - 1));
+      } catch (URISyntaxException e) {
+        throw new IOException(e);
+      }
+    }
+
+    return u;
+  }
+
+  /**
+   * Converts a collection of strings into a collection of URIs.
+   * @param names collection of strings to convert to URIs
+   * @return collection of URIs
+   */
+  public static List<URI> stringCollectionAsURIs(
+          Collection<String> names) {
+    List<URI> uris = new ArrayList<URI>(names.size());
+    for(String name : names) {
+      try {
+        uris.add(stringAsURI(name));
+      } catch (IOException e) {
+        LOG.error("Error while processing URI: " + name, e);
+      }
+    }
+    return uris;
+  }
 }
