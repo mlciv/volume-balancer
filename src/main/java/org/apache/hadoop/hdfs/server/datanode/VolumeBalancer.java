@@ -1,39 +1,27 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
-import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY;
-
 import java.io.File;
-import java.io.FileFilter;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.CountDownLatch;
+import java.text.DateFormat;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
-import org.apache.hadoop.hdfs.server.common.Storage;
-import org.apache.hadoop.hdfs.server.common.Util;
+import org.apache.hadoop.util.StringUtils;
+import org.apache.log4j.Appender;
+import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Logger;
+import org.apache.log4j.PropertyConfigurator;
 
 /**
  * Apache HDFS Datanode internal blocks rebalancing script.
  * <p/>
- * The script take a random subdir (@see {@link DataStorage#BLOCK_SUBDIR_PREFIX}) leaf (i.e. without other subdir
+ * The script take a random subdir (@see {@link org.apache.hadoop.hdfs.server.datanode.DataStorage#BLOCK_SUBDIR_PREFIX}) leaf (i.e. without other subdir
  * inside) from the most used partition and move it to a random subdir (not exceeding
  * {@link DFSConfigKeys.DFS_DATANODE_NUMBLOCKS_KEY}) of the least used partition
  * <p/>
@@ -57,7 +45,7 @@ import org.apache.log4j.Logger;
  * blocks of a subdir are moved, leaving the datadirs in a proper state
  * <p/>
  * Usage: java -cp volume-balancer-1.0.0-SNAPSHOT-jar-with-dependencies.jar:/path/to/hdfs-site.conf/parentDir
- * org.apache.hadoop.hdfs.server.datanode.VolumeBalancer [-threshold=0.1] [-concurrency=1]
+ * VolumeBalancer [-threshold=0.1] [-concurrency=1]
  * <p/>
  * Disk bandwidth can be easily monitored using $ iostat -x 1 -m
  *
@@ -66,105 +54,252 @@ import org.apache.log4j.Logger;
 public class VolumeBalancer {
 
   private static final Logger LOG = Logger.getLogger(VolumeBalancer.class);
+  private double threshold = 0.1;
+  private static final int DEFAULT_CONCURRENCY = 1;
+  private int concurrency = DEFAULT_CONCURRENCY;
+  private boolean simulateMode = true;
+  private boolean interative = true;
+  private static int maxBlocksPerDir = 64;
+  private VolumeBalancerPolicy vbPolicy;
+  private VolumeBalancerStatistics vbStatistics;
+  private Dispatcher dispatcher;
+
+  public VolumeBalancer(double threshold,int concurrency, boolean simulateMode, boolean interative){
+    this.threshold = threshold;
+    this.concurrency = concurrency;
+    this.simulateMode = simulateMode;
+    this.interative = interative;
+  }
+
+  public void setVbStatistics(VolumeBalancerStatistics vbStatistics) {
+    this.vbStatistics = vbStatistics;
+  }
+
+  public VolumeBalancerStatistics getVbStatistics() {
+    return vbStatistics;
+  }
+
+  public boolean isSimulateMode() {
+    return simulateMode;
+  }
+
+  public boolean isInterative() {
+    return interative;
+  }
+
+  public static int getMaxBlocksPerDir() {
+    return maxBlocksPerDir;
+  }
+
+  public double getThreshold() {
+    return threshold;
+  }
+
+  public void setThreshold(double threshold) {
+    this.threshold = threshold;
+  }
+
+  public VolumeBalancerPolicy getVbPolicy() {
+    return vbPolicy;
+  }
+
+  public void setVbPolicy(VolumeBalancerPolicy vbPolicy) {
+    this.vbPolicy = vbPolicy;
+  }
+
+  /**
+   * initAndUpdateVolumes data for balance
+   * 1. 2 lists fromSubdir
+   * 2. 2 lists target
+   * 3. PendingMove Queue
+   *
+   * @return
+   */
+  public boolean initAndUpdateVolumes(){
+    try {
+      Configuration conf = new Configuration();
+      conf.addResource("hdfs-site.xml");
+      //conf.addDefaultResource("hdfs-default.xml");
+
+      final Collection<URI> dataDirs = VBUtils.getStorageDirs(conf);
+      if (dataDirs.size() < 2) {
+        LOG.error("Not enough data dirs to rebalance: " + dataDirs);
+        return false;
+      }
+
+      this.concurrency = Math.min(concurrency, dataDirs.size()/2)+1;
+      this.dispatcher = new Dispatcher(this.concurrency);
+
+      LOG.info("Threshold = " + threshold + ", simulateMode = " + simulateMode + ", Concurrency is " + concurrency);
+
+      this.maxBlocksPerDir = conf.getInt(DFSConfigKeys.DFS_DATANODE_NUMBLOCKS_KEY,
+              DFSConfigKeys.DFS_DATANODE_NUMBLOCKS_DEFAULT);
+      LOG.info("maxBlockPerDir=" + this.maxBlocksPerDir);
+
+      //get allVolumes at start or real mode
+      if(vbStatistics.getAllVolumes()==null||!this.simulateMode){
+        vbStatistics.initVolumes(dataDirs.size());
+        // Ensure all finalized/current folders exists
+        boolean dataDirError = false;
+        for (URI dataDir : dataDirs) {
+          Volume v = new Volume(dataDir, simulateMode);
+          v.init();
+          vbStatistics.getAllVolumes().add(v);
+          final File f = v.getHadoopV1CurrentDir();
+          if (!f.isDirectory()) {
+            if (!f.mkdirs()) {
+              LOG.error("Failed creating " + f + ". Please check configuration and permissions");
+              dataDirError = true;
+            }
+          }
+        }
+        if (dataDirError) {
+          System.exit(3);
+        }
+      }
+
+      return true;
+    }catch(Exception ex){
+      LOG.error("failed to initAndUpdateVolumes for volume balancer"+ ExceptionUtils.getFullStackTrace(ex));
+      System.exit(3);
+    }
+    return false;
+  }
+
+  static class Result {
+    final ExitStatus exitStatus;
+    final long bytesLeftToMove;
+    final long bytesBeingMoved;
+    final long bytesAlreadyMoved;
+
+    Result(ExitStatus exitStatus, long bytesLeftToMove, long bytesBeingMoved,
+           long bytesAlreadyMoved) {
+      this.exitStatus = exitStatus;
+      this.bytesLeftToMove = bytesLeftToMove;
+      this.bytesBeingMoved = bytesBeingMoved;
+      this.bytesAlreadyMoved = bytesAlreadyMoved;
+    }
+
+    void print(int iteration, PrintStream out) {
+      out.printf("%-24s %10d  %19s  %18s  %17s%n",
+              DateFormat.getDateTimeInstance().format(new Date()), iteration,
+              StringUtils.byteDesc(bytesAlreadyMoved),
+              StringUtils.byteDesc(bytesLeftToMove),
+              StringUtils.byteDesc(bytesBeingMoved));
+    }
+  }
+
+  Result newResult(ExitStatus exitStatus, long bytesLeftToMove, long bytesBeingMoved) {
+    return new Result(exitStatus, bytesLeftToMove, bytesBeingMoved,
+            vbStatistics.getBytesMoved());
+  }
+
+  Result newResult(ExitStatus exitStatus) {
+    return new Result(exitStatus, -1, -1, VolumeBalancerStatistics.getInstance().getBytesMoved());
+  }
+
+  public void resetData(){
+    vbPolicy.reset();
+    dispatcher.reset();
+  }
+
+  public static int run(double threshold, int concurrency, boolean simulateMode, boolean interative){
+    boolean done = false;
+    VolumeBalancerStatistics vbs = VolumeBalancerStatistics.getInstance();
+    System.out.println("Time Stamp               Iteration#  Bytes Already Moved  Bytes Left To Move  Bytes Being Moved");
+    try {
+      for (int iteration = 0; !done; iteration++) {
+        done = true;
+        final VolumeBalancer vb = new VolumeBalancer(threshold,concurrency,simulateMode,interative);
+        vb.setVbStatistics(vbs);
+        if(!vb.initAndUpdateVolumes()){
+          LOG.fatal("Failed to initAndUpdateVolumes volume data, exit");
+          System.exit(3);
+        }
+        final Result r = vb.runOneInteration();
+        r.print(iteration, System.out);
+
+        // clean all lists
+        vb.resetData();
+        if (r.exitStatus == ExitStatus.IN_PROGRESS) {
+          done = false;
+        } else if (r.exitStatus != ExitStatus.SUCCESS) {
+          //must be an error statue, return.
+          return r.exitStatus.getExitCode();
+        }
+      }
+    }catch(Exception ex){
+      LOG.error("failed to run volume balancer"+ ExceptionUtils.getFullStackTrace(ex));
+    }
+    return ExitStatus.SUCCESS.getExitCode();
+  }
+
+  private Result runOneInteration(){
+    try {
+      vbPolicy = new VolumeBalancerPolicy(threshold);
+      vbPolicy.accumulateSpaces(vbStatistics.getAllVolumes());
+      final long bytesLeftToMove = vbPolicy.initAvgUsable(vbStatistics.getAllVolumes());
+      if (bytesLeftToMove == 0) {
+        System.out.println("The datanode is balanced. Exiting...");
+        return newResult(ExitStatus.SUCCESS, bytesLeftToMove, -1);
+      } else {
+        LOG.info("Need to move " + StringUtils.byteDesc(bytesLeftToMove)
+                + " to make the cluster balanced.");
+      }
+
+      /* Decide all the volumes that will participate in the block move and
+       * the number of bytes that need to be moved from one node to another
+       * in this iteration. Maximum bytes to be moved per node is
+       * Min(1 Band worth of bytes,  MAX_SIZE_TO_MOVE).
+       */
+      final long bytesBeingMoved = vbPolicy.chooseToMovePairs(dispatcher);
+      if (bytesBeingMoved == 0) {
+        System.out.println("No block can be moved. Exiting...");
+        return newResult(ExitStatus.NO_MOVE_BLOCK, bytesLeftToMove, bytesBeingMoved);
+      } else {
+        LOG.info( "Will move " + StringUtils.byteDesc(bytesBeingMoved) +
+                " in this iteration");
+      }
+
+      /* For each pair of <fromSubdir, target>, start a thread that repeatedly
+       * decide a block to be moved and its proxy fromSubdir,
+       * then initiates the move until all bytes are moved or no more block
+       * available to move.
+       * Exit no byte has been moved for 5 consecutive iterations.
+       */
+      if (!dispatcher.dispatchAndCheckContinue(this)) {
+        return newResult(ExitStatus.NO_MOVE_PROGRESS, bytesLeftToMove, bytesBeingMoved);
+      }
+
+      return newResult(ExitStatus.IN_PROGRESS, bytesLeftToMove, bytesBeingMoved);
+    } catch (IllegalArgumentException e) {
+      System.out.println(e + ".  Exiting ...");
+      return newResult(ExitStatus.ILLEGAL_ARGUMENTS);
+    } catch (IOException e) {
+      System.out.println(e + ".  Exiting ...");
+      return newResult(ExitStatus.IO_EXCEPTION);
+    } catch (InterruptedException e) {
+      System.out.println(e + ".  Exiting ...");
+      return newResult(ExitStatus.INTERRUPTED);
+    } finally {
+      dispatcher.shutdownNow();
+    }
+  }
 
   private static void usage() {
     LOG.info("Available options: \n" + " -threshold=d, default 0.1\n -concurrency=n, default 1\n"
+            + " -i, interative to confirm"
+            + "-submit, trust VB without interative"
             + VolumeBalancer.class.getCanonicalName());
   }
 
-  private static final Random r = new Random();
-  private static final int DEFAULT_CONCURRENCY = 1;
-
-  static class Volume implements Comparable<Volume> {
-    private final URI uri;
-    private final File uriFile;
-    private final boolean simulateMode;
-    private double usableSpace;
-
-    Volume(final URI uri) {
-      this.uri = uri;
-      this.uriFile = new File(this.uri);
-      this.simulateMode = false;
-    }
-
-    Volume(final URI uri, boolean mode) {
-      this.uri = uri;
-      this.uriFile = new File(this.uri);
-      this.simulateMode = mode;
-      this.usableSpace = -1;
-    }
-
-    void initUsableSpace() {
-      this.usableSpace = uriFile.getUsableSpace();
-    }
-
-    //for simulate, need to simulate the space avaible decrease when moving.
-    void setUsableSpace(double usableSpace) throws IOException {
-      if (simulateMode) {
-        this.usableSpace = usableSpace;
-      } else {
-        throw new IOException("set function is not supported for realMode");
-      }
-    }
-
-    double getUsableSpace() throws IOException {
-      if (simulateMode) {
-        if (this.usableSpace == -1) {
-          initUsableSpace();
-        }
-        return this.usableSpace;
-      } else {
-        return uriFile.getUsableSpace();
-      }
-    }
-
-    double getTotalSpace() throws IOException {
-      return uriFile.getTotalSpace();
-    }
-
-    double getPercentAvailableSpace() throws IOException {
-      return getUsableSpace() / getTotalSpace();
-    }
-
-    @Override
-    public String toString() {
-      String toString = "url={" + this.uri + "}";
-      try {
-        toString = toString + String.format("UsableSpace=%f,TotalSpace=%f,PercentAvailableSpace=%f", getUsableSpace(), getTotalSpace(), getPercentAvailableSpace());
-      } catch (IOException ex) {
-        toString = toString + "exception occurred when get usage"+ ex.toString();
-      }
-      return toString;
-    }
-
-    @Override
-    public int compareTo(Volume arg0) {
-      return uri.compareTo(arg0.uri);
-    }
-  }
-
-  static class SubdirTransfer {
-    final File from;
-    final File to;
-    final Volume fromVolume;
-    final Volume toVolume;
-    final long fromSubDirSize;
-
-    public SubdirTransfer(final File from, final File to, final Volume fromVolume, final Volume toVolume,final long fromSubDirSize) {
-      this.from = from;
-      this.to = to;
-      this.fromVolume = fromVolume;
-      this.toVolume = toVolume;
-      this.fromSubDirSize = fromSubDirSize;
-    }
-  }
-
   public static void main(String[] args) throws IOException, InterruptedException {
-
     double threshold = 0.1;
     int concurrency = DEFAULT_CONCURRENCY;
     boolean simulateMode = true;
+    boolean interative = false;
 
+    PropertyConfigurator.configure("log4j.properties");
     // parser options
     for (int i = 0; i < args.length; i++) {
       String arg = args[i];
@@ -172,6 +307,7 @@ public class VolumeBalancer {
         String[] split = arg.split("=");
         if (split.length > 1) {
           threshold = Double.parseDouble(split[1]);
+          //TODO: threshold should not be too large.
         }
       } else if (arg.startsWith("-concurrency")) {
         String[] split = arg.split("=");
@@ -180,581 +316,15 @@ public class VolumeBalancer {
         }
       } else if (arg.startsWith("-submit")) {
         simulateMode = false;
+      } else if (arg.startsWith("-i")) {
+        interative = true;
       } else {
         LOG.error("Wrong argument " + arg);
         usage();
         System.exit(2);
       }
     }
-
-    LOG.info("Threshold = " + threshold + ", simulateMode = " + simulateMode);
-
-    // Hadoop *always* need a configuration :)
-    final Configuration conf = new Configuration();
-
-    //for hadoop 1, no blockpool concept, for hadoop 2 adding blockPool
-    //final String blockpoolID = getBlockPoolID(conf);
-
-    //LOG.info("BlockPoolId is " + blockpoolID);
-
-    final Collection<URI> dataDirs = getStorageDirs(conf);
-
-    if (dataDirs.size() < 2) {
-      LOG.error("Not enough data dirs to rebalance: " + dataDirs);
-      return;
-    }
-
-    concurrency = Math.min(concurrency, dataDirs.size() - 1);
-
-    LOG.info("Concurrency is " + concurrency);
-
-    final int maxBlocksPerDir = conf.getInt(DFSConfigKeys.DFS_DATANODE_NUMBLOCKS_KEY,
-            DFSConfigKeys.DFS_DATANODE_NUMBLOCKS_DEFAULT);
-    LOG.info("maxBlockPerDir=" + maxBlocksPerDir);
-
-    //get allVolumes
-    final List<Volume> allVolumes = new ArrayList<Volume>(dataDirs.size());
-    double totalSpace = 0;
-    double totalUsableSpace = 0;
-    for (URI dataDir : dataDirs) {
-      Volume v = new Volume(dataDir, simulateMode);
-      allVolumes.add(v);
-      totalSpace += v.getTotalSpace();
-      totalUsableSpace += v.getUsableSpace();
-    }
-
-    //check balanced, targetAverageUsablePercent can not be the exactly same
-    //We set an threshold(e.g. 0.1), (targetAvertageUsablePercent +/- 0.1)
-    //The more balanced, the longer it will take.
-    double targetAverageUsablePercent = totalUsableSpace/totalSpace;
-
-    final Set<Volume> volumes = Collections.newSetFromMap(new ConcurrentSkipListMap<Volume, Boolean>());
-    volumes.addAll(allVolumes);
-
-    // Ensure all finalized/current folders exists
-    boolean dataDirError = false;
-    for (Volume v : allVolumes) {
-      final File f = generateHadoopV1DirInVolume(v);
-      if (!f.isDirectory()) {
-        if (!f.mkdirs()) {
-          LOG.error("Failed creating " + f + ". Please check configuration and permissions");
-          dataDirError = true;
-        }
-      }
-    }
-    if (dataDirError) {
-      System.exit(3);
-    }
-
-    // The actual copy is done in a dedicated thread, polling a blocking queue for new source and target directory
-    final ExecutorService copyExecutor = Executors.newFixedThreadPool(concurrency);
-    final BlockingQueue<SubdirTransfer> transferQueue = new LinkedBlockingQueue<SubdirTransfer>(concurrency);
-    final AtomicBoolean run = new AtomicBoolean(true);
-    final CountDownLatch shutdownLatch = new CountDownLatch(1);
-
-    Runtime.getRuntime().addShutdownHook(new WaitForProperShutdown(shutdownLatch, run));
-
-    for (int i = 0; i < concurrency; i++) {
-      copyExecutor.execute(new SubdirCopyRunner(run, transferQueue, volumes, simulateMode));
-    }
-
-    // no other runnables accepted for this TP.
-    copyExecutor.shutdown();
-
-    boolean balanced = false;
-    do {
-
-      if(checkBalanced(allVolumes,targetAverageUsablePercent,threshold)){
-        balanced = true;
-        break;
-      }
-
-      // leastUsedVolume should be removed, for copy bandwith?
-      Volume leastUsedVolume = getLeastUsedVolume(volumes);
-
-      // mostUsedVolume should be removed, for compute the threshold without waiting for all tasks finished
-      Volume mostUsedVolume = getMostUsedVolume(volumes);
-
-      if (!run.get()) {
-        break;
-      }
-
-      // Remove it for next iteration, for moving is asyncnized, every volume can be moved after its previous one
-      // finished.
-      volumes.remove(mostUsedVolume);
-      volumes.remove(leastUsedVolume);
-
-      LOG.debug("temporarily remove mostUsedVolume: " + mostUsedVolume + ", "
-              + (int) (mostUsedVolume.getPercentAvailableSpace() * 100) + "% usable");
-
-      final SubdirTransfer st = getSuitableSubdirTransfer(mostUsedVolume,leastUsedVolume,maxBlocksPerDir,targetAverageUsablePercent,threshold);
-
-      boolean scheduled = false;
-      while (run.get() && !(scheduled = transferQueue.offer(st, 1, TimeUnit.SECONDS))) {
-        // waiting, while checking if the process is still running
-      }
-      if (scheduled && run.get()) {
-        LOG.info("Scheduled move from " + st.from + " to " + st.to);
-      }
-    }
-    while (run.get() && !balanced);
-
-    run.set(false);
-
-    // Waiting for all copy thread to finish their current move
-    copyExecutor.awaitTermination(10, TimeUnit.MINUTES);
-
-    // TODO: print some reports for your manager
-
-    // Let the shutdown thread finishing
-    shutdownLatch.countDown();
+    VolumeBalancer.run(threshold,concurrency,simulateMode,interative);
   }
 
-
-  /**
-   * check allVolumes, make sure :
-   * 1. every volume is
-   * @param allVolumes
-   * @param threshold
-   * @return
-   */
-  private static boolean checkBalanced(List<Volume> allVolumes,double targetAveragePercent,double threshold){
-    boolean balanced = true;
-    try {
-      for (Volume volume : allVolumes) {
-        // Check if the volume is balanced (i.e. between totalPercentAvailble +/- threshold)
-        if (!(targetAveragePercent - threshold < volume.getPercentAvailableSpace()
-                && targetAveragePercent + threshold > volume.getPercentAvailableSpace())) {
-          LOG.info("volume["+volume.toString()+"] is not within the threshold, continue");
-          balanced = false;
-          break;
-        }else{
-          LOG.info("volume["+volume.toString()+"] is within the threshold, hooray!");
-        }
-      }
-    }catch(IOException ex){
-      LOG.error("failed to check balance, continue to balance volume and wait for next check turn");
-      balanced = false;
-    }
-    return balanced;
-  }
-
-  /**
-   * choose the subdir parent, where we can copy the most subdir there.
-   * @param least
-   * @param maxBlocksPerDir
-   * @return
-   */
-  private static File getLeastUsedVolumeSubdirParent(Volume least,long maxBlocksPerDir){
-    final File finalizedLeastUsedBlockStorage = generateHadoopV1DirInVolume(least);
-
-    File leastUsedBlockSubdirParent = finalizedLeastUsedBlockStorage;
-
-    // Try to store the subdir in the finalized folder first.
-    if (!hasAvailableSeat(leastUsedBlockSubdirParent, maxBlocksPerDir)) {
-      File tmpLeastUsedBlockSubdir = null;
-      int depth = 0;
-      do {
-        tmpLeastUsedBlockSubdir = findRandomSubdirWithAvailableSeat(leastUsedBlockSubdirParent, maxBlocksPerDir);
-
-        if (tmpLeastUsedBlockSubdir != null) {
-          leastUsedBlockSubdirParent = tmpLeastUsedBlockSubdir;
-        } else {
-          depth++;
-          if (depth > 2) {
-            // don't do too deep in folders hierarchy.
-            leastUsedBlockSubdirParent = getRandomSubdir(finalizedLeastUsedBlockStorage);
-          } else {
-            leastUsedBlockSubdirParent = getRandomSubdir(leastUsedBlockSubdirParent);
-          }
-        }
-      }
-      while (tmpLeastUsedBlockSubdir == null);
-    }
-    return leastUsedBlockSubdirParent;
-  }
-
-  /**
-   * choose the leastUsedVolume
-   * @param volumes
-   * @return
-   * @throws IOException
-   */
-  private static Volume getLeastUsedVolume(Set<Volume> volumes) throws IOException{
-    Volume leastUsedVolume = null;
-    for (Volume v : volumes) {
-      if (leastUsedVolume == null || v.getUsableSpace() > leastUsedVolume.getUsableSpace()) {
-        leastUsedVolume = v;
-      }
-    }
-    LOG.debug("leastUsedVolume: " + leastUsedVolume.toString());
-    return leastUsedVolume;
-  }
-
-  /**
-   * choose the mostUsedVolume
-   * @param volumes
-   * @return
-   * @throws IOException
-   */
-  private static Volume getMostUsedVolume(Set<Volume> volumes) throws IOException{
-
-    Volume mostUsedVolume = null;
-    do {
-      for (Volume v : volumes) {
-        if ((mostUsedVolume == null || v.getUsableSpace() < mostUsedVolume.getUsableSpace())) {
-          mostUsedVolume = v;
-        }
-      }
-      if (mostUsedVolume == null) {
-        // All the drives are used for a copy. Maybe concurrency might be slightly reduced
-        try {
-          Thread.sleep(100);
-        } catch (InterruptedException e) {
-          break;
-        }
-      }
-    }
-    while (mostUsedVolume == null);
-    return mostUsedVolume;
-  }
-
-  /**
-   * return the pair of <from,to> as SubdirTransfer
-   * @param most
-   * @param least
-   * @return
-   */
-  private static SubdirTransfer getSuitableSubdirTransfer(Volume most, Volume least, long maxBlocksPerDir,double targetAveragePercent,double threshold){
-
-    //choose least subdir parent
-    File leastUsedBlockSubdirParent = getLeastUsedVolumeSubdirParent(least,maxBlocksPerDir);
-    //choose most subdir
-    File mostUsedBlockSubdir = generateHadoopV1DirInVolume(most);
-    File tmpMostUsedBlockSubdir = null;
-    long subDirSize = 0;
-    try {
-      //1. let least up to average.
-      tmpMostUsedBlockSubdir = getSuitableSubdir(least,mostUsedBlockSubdir,targetAveragePercent,threshold);
-      if(tmpMostUsedBlockSubdir==null)
-      {
-        do {
-          tmpMostUsedBlockSubdir = getRandomSubdir(mostUsedBlockSubdir);
-          //2. only let least not full
-          long size = FileUtils.sizeOfDirectory(tmpMostUsedBlockSubdir);
-          if (tmpMostUsedBlockSubdir != null && size < least.getUsableSpace()) {
-            mostUsedBlockSubdir = tmpMostUsedBlockSubdir;
-            subDirSize = size;
-          }
-        }
-        while (tmpMostUsedBlockSubdir != null);
-      }else {
-        mostUsedBlockSubdir = tmpMostUsedBlockSubdir;
-        subDirSize = FileUtils.sizeOfDirectory(mostUsedBlockSubdir);
-      }
-    }catch(Exception ex){
-      LOG.error("failed to get SuitableSubDir");
-    }
-
-    //choose least subdir
-    final File finalLeastUsedBlockSubdir = new File(leastUsedBlockSubdirParent, nextSubdir(leastUsedBlockSubdirParent, DataStorage.BLOCK_SUBDIR_PREFIX));
-    return new SubdirTransfer(mostUsedBlockSubdir, finalLeastUsedBlockSubdir, most, least,subDirSize);
-  }
-
-  /**
-   * get the largest index of the subdir
-   * @param dir
-   * @param subdirPrefix
-   * @return
-   */
-  private static String nextSubdir(File dir, final String subdirPrefix) {
-    File[] existing = dir.listFiles(new FileFilter() {
-      @Override
-      public boolean accept(File pathname) {
-        return pathname.getName().startsWith(subdirPrefix);
-      }
-    });
-    if (existing == null || existing.length == 0)
-      return subdirPrefix + "0";
-
-    //  listFiles doesn't guarantee ordering
-    int lastIndex = -1;
-    for (int i = 0; i < existing.length; i++) {
-      String name = existing[i].getName();
-      try {
-        int index = Integer.parseInt(name.substring(subdirPrefix.length()));
-        if (lastIndex < index)
-          lastIndex = index;
-      } catch (NumberFormatException e) {
-        // ignore
-      }
-    }
-    return subdirPrefix + (lastIndex + 1);
-  }
-
-  private static File[] findSubdirs(File parent) {
-    return parent.listFiles(new FileFilter() {
-      @Override
-      public boolean accept(File pathname) {
-        return pathname.getName().startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
-      }
-    });
-  }
-
-  //How to choose the random subdir.
-  private static File getRandomSubdir(File parent) {
-
-    File[] files = findSubdirs(parent);
-    if (files == null || files.length == 0) {
-      return null;
-    } else {
-      return files[r.nextInt(files.length)];
-    }
-  }
-
-  /**
-   * getSuitableSubdir from parent's subdir,
-   * 1. subdir should be less than the usable space of least volume
-   * 2. subdir should be better if it will reach the threshold.
-   * 3.
-   * @param least
-   * @param parent
-   * @param targetAveragePercent
-   * @param threshold
-   * @return
-   */
-  private static File getSuitableSubdir(Volume least, File parent, double targetAveragePercent,double threshold){
-    File[] files = findSubdirs(parent);
-    if (files == null || files.length == 0) {
-      return null;
-    } else {
-      try {
-        for (File file : files) {
-          long size = FileUtils.sizeOfDirectory(file);
-          if (Math.abs((least.getUsableSpace() - size) / least.getTotalSpace() - targetAveragePercent) < threshold) {
-            LOG.info("find suitable subdir "+ file.toString());
-            return file;
-          }else {
-            File innerSubdir = getSuitableSubdir(least,file,targetAveragePercent,threshold);
-            if(innerSubdir==null){
-              continue;
-            }else{
-              return innerSubdir;
-            }
-          }
-        }
-      }
-      catch(IOException ex){
-        LOG.error("failed to get userspace when getting suitableSubDir");
-      }
-    }
-    return null;
-  }
-
-
-  private static File findRandomSubdirWithAvailableSeat(File parent, long maxBlocksPerDir) {
-    File[] subdirsArray = findSubdirs(parent);
-    if (subdirsArray == null) {
-      return null;
-    }
-    List<File> subdirs = Arrays.asList(subdirsArray);
-    Collections.shuffle(subdirs);
-
-    for (File subdir : subdirs) {
-      if (hasAvailableSeat(subdir, maxBlocksPerDir)) {
-        return subdir;
-      }
-    }
-    return null;
-  }
-
-  private static boolean hasAvailableSeat(File subdir, long maxBlocksPerDir) {
-    final File[] existingSubdirs = findSubdirs(subdir);
-    return existingSubdirs.length < maxBlocksPerDir;
-  }
-
-//    private static String getBlockPoolID(Configuration conf) throws IOException {
-//
-//        final Collection<URI> namenodeURIs = DFSUtil.getNsServiceRpcUris(conf);
-//        URI nameNodeUri = namenodeURIs.iterator().next();
-//
-//        final NamenodeProtocol namenode = NameNodeProxies.createProxy(conf, nameNodeUri, NamenodeProtocol.class)
-//            .getProxy();
-//        final NamespaceInfo namespaceinfo = namenode.versionRequest();
-//        return namespaceinfo.getBlockPoolID();
-//    }
-
-//    private static File generateFinalizeDirInVolume(Volume v, String blockpoolID) {
-//        return new File(new File(v.uri), Storage.STORAGE_DIR_CURRENT + "/" + blockpoolID + "/"
-//            + Storage.STORAGE_DIR_CURRENT + "/" + DataStorage.STORAGE_DIR_FINALIZED);
-//    }
-
-  private static File generateHadoopV1DirInVolume(Volume v) {
-    return new File(new File(v.uri), Storage.STORAGE_DIR_CURRENT + "/");
-  }
-
-  private static class WaitForProperShutdown extends Thread {
-    private final CountDownLatch shutdownLatch;
-    private final AtomicBoolean run;
-
-    public WaitForProperShutdown(CountDownLatch l, AtomicBoolean b) {
-      this.shutdownLatch = l;
-      this.run = b;
-    }
-
-    @Override
-    public void run() {
-      LOG.info("Shutdown caught. We'll finish the current move and shutdown.");
-      run.set(false);
-      try {
-        shutdownLatch.await();
-      } catch (InterruptedException e) {
-        // well, we want to shutdown anyway :)
-      }
-    }
-  }
-
-  private static class SubdirCopyRunner implements Runnable {
-
-    private final BlockingQueue<SubdirTransfer> transferQueue;
-    private final AtomicBoolean run;
-    private final Set<Volume> volumes;
-    private final boolean simulateMode;
-
-    public SubdirCopyRunner(AtomicBoolean b, BlockingQueue<SubdirTransfer> bq, Set<Volume> v, boolean simulateMode) {
-      this.transferQueue = bq;
-      this.run = b;
-      this.volumes = v;
-      this.simulateMode = simulateMode;
-    }
-
-
-    @Override
-    public void run() {
-
-      while (run.get()) {
-        SubdirTransfer st = null;
-        try {
-          st = transferQueue.poll(1, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-        }
-
-        if (st != null) {
-
-          long start = System.currentTimeMillis();
-
-          try {
-            if (simulateMode) {
-              double fromUsableSpace = st.fromVolume.getUsableSpace();
-              // how to choose the source folder to copy.
-              fromUsableSpace = fromUsableSpace + st.fromSubDirSize;
-              st.fromVolume.setUsableSpace(fromUsableSpace);
-              double toUsableSpace = st.toVolume.getUsableSpace();
-              toUsableSpace = toUsableSpace - st.fromSubDirSize;
-              st.toVolume.setUsableSpace(toUsableSpace);
-            } else {
-              FileUtils.moveDirectory(st.from, st.to);
-            }
-
-            // for test
-            LOG.info("move " + st.from + " to " + st.to + " took " + (System.currentTimeMillis() - start)
-                    + "ms");
-          } catch (org.apache.commons.io.FileExistsException e) {
-            // Corner case when the random destination folder has been picked by the previous run
-            // skipping it is safe
-            LOG.warn(st.to + " already exists, skipping this one.");
-          } catch (java.io.FileNotFoundException e) {
-            // Corner case when the random source folder has been picked by the previous run
-            // skipping it is safe
-            LOG.warn(st.to + " does not exist, skipping this one.");
-          } catch (IOException e) {
-            e.printStackTrace();
-            run.set(false);
-          } finally {
-            // task finished, adding volumes back
-            LOG.info("CopyTaskEnd, adding volume[" + st.fromVolume.toString() + "] back");
-            volumes.add(st.fromVolume);
-          }
-        }
-      }
-
-      LOG.info(this.getClass().getName() + " shut down properly.");
-    }
-  }
-
-  static Collection<URI> getStorageDirs(Configuration conf) {
-    Collection<String> dirNames = conf.getTrimmedStringCollection(DFS_DATANODE_DATA_DIR_KEY);
-    return stringCollectionAsURIs(dirNames);
-  }
-
-  /**
-   * Interprets the passed string as a URI. In case of error it
-   * assumes the specified string is a file.
-   *
-   * @param s the string to interpret
-   * @return the resulting URI
-   * @throws IOException
-   */
-  public static URI stringAsURI(String s) throws IOException {
-    URI u = null;
-    // try to make a URI
-    try {
-      u = new URI(s);
-    } catch (URISyntaxException e) {
-      LOG.error("Syntax error in URI " + s
-              + ". Please check hdfs configuration.", e);
-    }
-
-    // if URI is null or scheme is undefined, then assume it's file://
-    if (u == null || u.getScheme() == null) {
-      LOG.warn("Path " + s + " should be specified as a URI "
-              + "in configuration files. Please update hdfs configuration.");
-      u = fileAsURI(new File(s));
-    }
-    return u;
-  }
-
-  /**
-   * Converts the passed File to a URI. This method trims the trailing slash if
-   * one is appended because the underlying file is in fact a directory that
-   * exists.
-   *
-   * @param f the file to convert
-   * @return the resulting URI
-   * @throws IOException
-   */
-  public static URI fileAsURI(File f) throws IOException {
-    URI u = f.getCanonicalFile().toURI();
-
-    // trim the trailing slash, if it's present
-    if (u.getPath().endsWith("/")) {
-      String uriAsString = u.toString();
-      try {
-        u = new URI(uriAsString.substring(0, uriAsString.length() - 1));
-      } catch (URISyntaxException e) {
-        throw new IOException(e);
-      }
-    }
-
-    return u;
-  }
-
-  /**
-   * Converts a collection of strings into a collection of URIs.
-   *
-   * @param names collection of strings to convert to URIs
-   * @return collection of URIs
-   */
-  public static List<URI> stringCollectionAsURIs(
-          Collection<String> names) {
-    List<URI> uris = new ArrayList<URI>(names.size());
-    for (String name : names) {
-      try {
-        uris.add(stringAsURI(name));
-      } catch (IOException e) {
-        LOG.error("Error while processing URI: " + name, e);
-      }
-    }
-    return uris;
-  }
 }

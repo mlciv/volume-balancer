@@ -1,0 +1,154 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+
+<property>
+    <name>dfs.name.dir</name>
+    <value>/pvdata/hadoopdata/name/,/opt/hadoopdata/name/</value>
+</property>
+
+<property>
+    <name>dfs.data.dir</name>
+    <value>/data_b/hadoopdata/data/,/data_c/hadoopdata/data/,/data_d/hadoopdata/data/,/data_e/hadoopdata/data/,/data_f/hadoopdata/data/,/data_g/hadoopdata/data/,/data_h/hadoopdata/data/,/data_i/hadoopdata/data/,/data_j/hadoopdata/data/,/data_k/hadoopdata/data/,/data_l/hadoopdata/data/,/data_m/hadoopdata/data/</value>
+</property>
+
+<property>
+    <name>dfs.replication</name>
+    <value>3</value>
+</property>
+
+<property>
+    <name>dfs.block.size</name>
+    <value>134217728</value>
+    <description>The default block size for new files.</description>
+</property>
+
+<property>
+  <name>dfs.datanode.handler.count</name>
+  <value>50</value>
+  <description>The number of server threads for the datanode.</description>
+</property>
+
+<property>
+    <name>dfs.permissions</name>
+    <value>true</value>
+    <description></description>
+</property>
+
+<property>
+    <name>dfs.permissions.supergroup</name>
+    <value>supergroup</value>
+    <description></description>
+</property>
+
+<property>
+  <name>dfs.datanode.max.xcievers</name>
+  <value>65536</value>
+</property>
+
+<property>    
+    <name>dfs.hosts.exclude</name>    
+    <value>/opt/sohuhadoop/conf/excludes</value>    
+    <final>true</final>
+</property>
+
+<property> 
+    <name>dfs.balance.bandwidthPerSec</name> 
+    <value>10485760</value> 
+    <description>
+        Specifies the maximum bandwidth that each datanode can utilize for the balancing purpose in term of the number of bytes per second.
+    </description> 
+</property>
+
+<!-- General HDFS security config -->
+<property>
+  <name>dfs.block.access.token.enable</name>
+  <value>true</value>
+</property>
+ 
+<!-- NameNode security config -->
+<property>
+  <name>dfs.https.address</name>
+  <value>tmaster.hadoop.sohuno.com:50470</value>
+</property>
+<property>
+  <name>dfs.https.port</name>
+  <value>50470</value>
+</property>
+
+<!--
+<property>
+  <name>dfs.namenode.keytab.file</name>
+  <value>/opt/sohuhadoop/conf/hadoopmc.keytab</value> 
+</property>
+<property>
+  <name>dfs.namenode.kerberos.principal</name>
+  <value>hadoopmc/zw-hadoop-master.@HADOOP.SOHU.COM</value>
+</property>
+<property>
+  <name>dfs.namenode.kerberos.https.principal</name>
+  <value>host/zw-hadoop-master.@HADOOP.SOHU.COM</value>
+</property>
+-->
+
+<!--
+ 
+<property>
+  <name>dfs.secondary.http.address</name>
+  <value>zw-hadoop-slave-80-138.:50090</value>
+</property>
+<property>
+  <name>dfs.secondary.https.address</name>
+  <value>zw-hadoop-slave-80-138.:50495</value>
+</property>
+<property>
+  <name>dfs.secondary.https.port</name>
+  <value>50495</value>
+</property>
+<property>
+  <name>dfs.secondary.namenode.keytab.file</name>
+  <value>/opt/sohuhadoop/conf/hadoopmc.keytab</value>
+</property>
+<property>
+  <name>dfs.secondary.namenode.kerberos.principal</name>
+  <value>hadoopmc/_HOST@HADOOP.SOHU.COM</value>
+</property>
+<property>
+  <name>dfs.secondary.namenode.kerberos.https.principal</name>
+  <value>host/_HOST@HADOOP.SOHU.COM</value>
+</property>
+-->
+ 
+<!-- DataNode security config -->
+<property>
+  <name>dfs.datanode.data.dir.perm</name>
+  <value>700</value>
+</property>
+<property>
+  <name>dfs.datanode.address</name>
+  <value>0.0.0.0:1004</value>
+</property>
+<property>
+  <name>dfs.datanode.http.address</name>
+  <value>0.0.0.0:1006</value>
+</property>
+
+<!--
+<property>
+  <name>dfs.datanode.keytab.file</name>
+  <value>/opt/sohuhadoop/conf/hadoopmc.keytab</value>
+</property>
+<property>
+  <name>dfs.datanode.kerberos.principal</name>
+  <value>hadoopmc/_HOST@HADOOP.SOHU.COM</value>
+</property>
+<property>
+  <name>dfs.datanode.kerberos.https.principal</name>
+  <value>hadoopmc/_HOST@HADOOP.SOHU.COM</value>
+</property>
+-->
+
+</configuration>
