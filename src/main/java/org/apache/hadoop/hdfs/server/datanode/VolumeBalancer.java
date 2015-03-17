@@ -1,20 +1,17 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.PrintStream;
+import java.io.*;
 import java.net.URI;
 import java.text.DateFormat;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
 import org.apache.hadoop.util.StringUtils;
-import org.apache.log4j.Appender;
-import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
 
@@ -54,21 +51,24 @@ import org.apache.log4j.PropertyConfigurator;
 public class VolumeBalancer {
 
   private static final Logger LOG = Logger.getLogger(VolumeBalancer.class);
-  private double threshold = 0.1;
-  private static final int DEFAULT_CONCURRENCY = 1;
-  private int concurrency = DEFAULT_CONCURRENCY;
-  private boolean simulateMode = true;
-  private boolean interative = true;
-  private static int maxBlocksPerDir = 64;
-  private VolumeBalancerPolicy vbPolicy;
-  private VolumeBalancerStatistics vbStatistics;
-  private Dispatcher dispatcher;
+  protected double threshold = 0.0001;
+  protected static final int DEFAULT_CONCURRENCY = 1;
+  protected int concurrency = DEFAULT_CONCURRENCY;
+  protected boolean simulateMode = true;
+  protected boolean interative = true;
+  protected static int maxBlocksPerDir = 64;
+  protected VolumeBalancerPolicy vbPolicy;
+  protected VolumeBalancerStatistics vbStatistics;
+  protected Dispatcher dispatcher;
 
   public VolumeBalancer(double threshold,int concurrency, boolean simulateMode, boolean interative){
     this.threshold = threshold;
     this.concurrency = concurrency;
     this.simulateMode = simulateMode;
     this.interative = interative;
+  }
+
+  public VolumeBalancer(){
   }
 
   public void setVbStatistics(VolumeBalancerStatistics vbStatistics) {
@@ -89,22 +89,6 @@ public class VolumeBalancer {
 
   public static int getMaxBlocksPerDir() {
     return maxBlocksPerDir;
-  }
-
-  public double getThreshold() {
-    return threshold;
-  }
-
-  public void setThreshold(double threshold) {
-    this.threshold = threshold;
-  }
-
-  public VolumeBalancerPolicy getVbPolicy() {
-    return vbPolicy;
-  }
-
-  public void setVbPolicy(VolumeBalancerPolicy vbPolicy) {
-    this.vbPolicy = vbPolicy;
   }
 
   /**
@@ -198,10 +182,6 @@ public class VolumeBalancer {
     return new Result(exitStatus, -1, -1, VolumeBalancerStatistics.getInstance().getBytesMoved());
   }
 
-  public void resetData(){
-    vbPolicy.reset();
-    dispatcher.reset();
-  }
 
   public static int run(double threshold, int concurrency, boolean simulateMode, boolean interative){
     boolean done = false;
@@ -228,13 +208,28 @@ public class VolumeBalancer {
           return r.exitStatus.getExitCode();
         }
       }
+      //TODO: 1. datanode restart
+
+      //TODO: 2. checkdataNode
+
+      //TODO: if(succeed) removeBackup
+
+      //TODO: if(failed) {1. shutdown datanode, 2. rollback.}
+
+
     }catch(Exception ex){
       LOG.error("failed to run volume balancer"+ ExceptionUtils.getFullStackTrace(ex));
+      //TODO : need rollback
+    }
+    finally {
+      if(!simulateMode){
+        vbs.reset();
+      }
     }
     return ExitStatus.SUCCESS.getExitCode();
   }
 
-  private Result runOneInteration(){
+  protected Result runOneInteration(){
     try {
       vbPolicy = new VolumeBalancerPolicy(threshold);
       vbPolicy.accumulateSpaces(vbStatistics.getAllVolumes());
@@ -273,23 +268,33 @@ public class VolumeBalancer {
 
       return newResult(ExitStatus.IN_PROGRESS, bytesLeftToMove, bytesBeingMoved);
     } catch (IllegalArgumentException e) {
-      System.out.println(e + ".  Exiting ...");
+      System.out.println(ExceptionUtils.getFullStackTrace(e) + ".  Exiting ...");
       return newResult(ExitStatus.ILLEGAL_ARGUMENTS);
     } catch (IOException e) {
-      System.out.println(e + ".  Exiting ...");
+      System.out.println(ExceptionUtils.getFullStackTrace(e) + ".  Exiting ...");
       return newResult(ExitStatus.IO_EXCEPTION);
     } catch (InterruptedException e) {
-      System.out.println(e + ".  Exiting ...");
+      System.out.println(ExceptionUtils.getFullStackTrace(e) + ".  Exiting ...");
       return newResult(ExitStatus.INTERRUPTED);
     } finally {
       dispatcher.shutdownNow();
     }
   }
 
+  public void resetData(){
+    if(vbPolicy!=null){
+      vbPolicy.reset();
+    }
+    if(dispatcher!=null) {
+      dispatcher.reset();
+    }
+  }
+
   private static void usage() {
     LOG.info("Available options: \n" + " -threshold=d, default 0.1\n -concurrency=n, default 1\n"
-            + " -i, interative to confirm"
-            + "-submit, trust VB without interative"
+            + " -i, interative to confirm \n"
+            + " -submit, trust VB without interative \n"
+            + " -unbalance, unbalance the volume for test"
             + VolumeBalancer.class.getCanonicalName());
   }
 
@@ -298,6 +303,8 @@ public class VolumeBalancer {
     int concurrency = DEFAULT_CONCURRENCY;
     boolean simulateMode = true;
     boolean interative = false;
+    boolean unbalance = false;
+    File rollBackFile = null;
 
     PropertyConfigurator.configure("log4j.properties");
     // parser options
@@ -316,6 +323,13 @@ public class VolumeBalancer {
         }
       } else if (arg.startsWith("-submit")) {
         simulateMode = false;
+      } else if (arg.startsWith("-unbalance")) {
+        unbalance = true;
+      } else if (arg.startsWith("-rollback")) {
+        String[] split = arg.split("=");
+        if (split.length > 1) {
+          rollBackFile = new File(split[1]);
+        }
       } else if (arg.startsWith("-i")) {
         interative = true;
       } else {
@@ -324,7 +338,74 @@ public class VolumeBalancer {
         System.exit(2);
       }
     }
-    VolumeBalancer.run(threshold,concurrency,simulateMode,interative);
+    if (rollBackFile != null) {
+      VolumeBalancer.rollback(rollBackFile);
+    } else {
+      if (simulateMode || unbalance) {
+        if (simulateMode) {
+          LOG.info("VolumeBalancer working at simulate Mode");
+        }
+        VolumeUnbalancer.run(threshold, concurrency, simulateMode, interative);
+      }
+
+      VolumeBalancer.run(threshold, concurrency, simulateMode, interative);
+    }
   }
 
+  public static void rollback(File rollBackFile){
+    if(rollBackFile==null) return ;
+    else{
+      if(!rollBackFile.exists()) return ;
+      else{
+        BufferedReader reader = null;
+        VolumeBalancer vb = new VolumeBalancer();
+        //TODO : rollback should back to first, one per time.
+        vb.dispatcher = new Dispatcher(1);
+        List<Rollback> rollbackList = new ArrayList<Rollback>();
+        try {
+          reader = new BufferedReader(new FileReader(rollBackFile));
+          int rollBackNum = 0;
+          String line = reader.readLine();
+          while(line!=null){
+            String splits[] = line.split("\t");
+            if(splits.length!=4) {
+              LOG.error("failed to rollback for"+ line);
+            }else{
+              String time = splits[0];
+              File fromSubdir = new File(splits[1]);
+              long fromSubdirSize = Long.parseLong(splits[2]);
+              File toSubdir = new File(splits[3]);
+              if(fromSubdir.exists()){
+                throw new IOException("fromSubdir"+fromSubdir.getAbsolutePath()+"already exist");
+              }
+              if(!toSubdir.exists()){
+                throw new IOException("toSubdir"+fromSubdir.getAbsolutePath()+"not exist");
+              }
+              long toSubdirSize = FileUtils.sizeOfDirectory(toSubdir);
+              if(fromSubdirSize!=toSubdirSize){
+                throw new IOException(String.format("fromSubdirSize=%d is not equal to toSubdir=%d, toSubdir=%s may have been modified",fromSubdirSize,toSubdirSize,toSubdir.getAbsolutePath()));
+              }
+              rollBackNum++;
+              Rollback rollback = new Rollback(toSubdir,fromSubdir,fromSubdirSize);
+              rollbackList.add(rollback);
+            }
+          }
+          for(int j=rollBackNum-1;j>=0;j--) {
+            vb.dispatcher.addPendingMove(rollbackList.get(j));
+          }
+          vb.dispatcher.dispatchBlockMoves(vb);
+        }catch(Exception ex){
+          LOG.info("rollback failed "+ ExceptionUtils.getFullStackTrace(ex));
+        }
+        finally {
+          try{
+            reader.close();
+            vb.resetData();
+          }catch(Exception ef){
+            LOG.info("failed to close reader");
+          }
+        }
+      }
+    }
+  }
 }

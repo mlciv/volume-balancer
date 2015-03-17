@@ -74,6 +74,23 @@ public class Source implements Comparable<Source>{
     }
   }
 
+  public Subdir findUnblanceSubdirToMove(Volume target){
+    // move the more, the better, min and target.getUsableSpace-threshold is the limit.
+    Subdir maxTargetSubdir = new Subdir(null,target.getMaxMove());
+    SortedSet<Subdir> avaiblesSubdirs = this.volume.getSubdirSet().headSet(maxTargetSubdir);
+
+    if(avaiblesSubdirs.size()==0){
+      if(LOG.isDebugEnabled()) {
+        LOG.info(String.format("SourceVolume[%s] has no subdir less than maxMove[%d]", this.toString(), this.volume.getMaxMove()));
+      }
+      return null;
+    }
+    // if lessThanMax existed
+    Subdir maxSourceSubdir = avaiblesSubdirs.last();
+    // maxSourceSubdir must less than source.getMaxMove
+    return maxSourceSubdir;
+  }
+
   /**
    * Find a list of subdirs, the sum of their size is near size.
    * for Greedy policy, choose the nearsest Size, but not exceed the maxSize
@@ -84,8 +101,7 @@ public class Source implements Comparable<Source>{
    *     2.3 <~,minSubdir> lessSet.last()
    * @return
    */
-  public Subdir findSuitableSubdirToMove(Volume target){
-    // get Max dir, if target.getMinMove > maxDir
+  public Subdir findBalanceSubdirToMove(Volume target){
     Subdir maxSourceSubdir = new Subdir(null,this.volume.getMaxMove());
     SortedSet<Subdir> availblesSubdirs = this.volume.getSubdirSet().headSet(maxSourceSubdir);
 
@@ -97,8 +113,8 @@ public class Source implements Comparable<Source>{
     }
 
     Subdir maxDir = availblesSubdirs.last();
-    Subdir minTargetSubdir = new Subdir(null,target.getMinMove());
-    Subdir maxTargetSubdir = new Subdir(null,target.getMaxMove());
+    Subdir minTargetSubdir = new Subdir(null,Math.max(target.getMinMove(),availblesSubdirs.first().getSize()));
+    Subdir maxTargetSubdir = new Subdir(null,Math.min(target.getMaxMove(),maxDir.getSize()));
 
     if(target.getMinMove() > maxDir.getSize()){
       // target cannot be filled by only one file.

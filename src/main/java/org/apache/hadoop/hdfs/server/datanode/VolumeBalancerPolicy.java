@@ -4,6 +4,7 @@ import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.log4j.Logger;
 
 import java.io.IOException;
+import java.text.DecimalFormat;
 import java.util.*;
 
 /**
@@ -11,18 +12,27 @@ import java.util.*;
  */
 public class VolumeBalancerPolicy {
   private static final Logger LOG = Logger.getLogger(VolumeBalancerPolicy.class);
-  private double totalCapacity = 0;
-  private double totalUsableSpace = 0;
-  private long overloadedBytes = 0;
-  private long underloadedBytes = 0;
+  protected double totalCapacity = 0;
+  protected double totalUsableSpace = 0;
+  protected long overloadedBytes = 0;
+  protected long underloadedBytes = 0;
 
-  private double avgUsableRatio = 0.0;
-  private double threshold = 0.0;
+  protected double avgUsableRatio = 0.0;
+  protected double threshold = 0.0;
   //4 set should all sorted by descending
-  private final TreeSet<Source> farBelowAvgUsbale = new TreeSet<Source>();
-  private final TreeSet<Source> thresholdBelowAvgUsable = new TreeSet<Source>();
-  private final TreeSet<Target> thresholdAboveAvgUsable = new TreeSet<Target>();
-  private final TreeSet<Target> farAboveAvgUsable = new TreeSet<Target>();
+  protected final TreeSet<Source> farBelowAvgUsbale = new TreeSet<Source>();
+  protected final TreeSet<Source> thresholdBelowAvgUsable = new TreeSet<Source>();
+  protected final TreeSet<Target> thresholdAboveAvgUsable = new TreeSet<Target>();
+  protected final TreeSet<Target> farAboveAvgUsable = new TreeSet<Target>();
+
+  public VolumeBalancerPolicy(){
+    totalCapacity = 0;
+    totalUsableSpace = 0;
+    avgUsableRatio = 0;
+    overloadedBytes = 0;
+    underloadedBytes = 0;
+    this.threshold = 0;
+  }
 
   public VolumeBalancerPolicy(double threshold){
     totalCapacity = 0;
@@ -52,7 +62,7 @@ public class VolumeBalancerPolicy {
     }
   }
 
-  private static long ratio2bytes(double percentage, long capacity) {
+  protected static long ratio2bytes(double percentage, long capacity) {
     return (long)(percentage * capacity);
   }
 
@@ -61,7 +71,9 @@ public class VolumeBalancerPolicy {
    * @return
    */
   public long initAvgUsable(final List<Volume> volumes) {
+    LOG.info("Begin to initAvgUsable in VolumeBalancer...");
     this.avgUsableRatio = totalUsableSpace/totalCapacity;
+    String volumeReport = String.format("%.5f+/-%.5f",this.avgUsableRatio,this.threshold);
     try{
       for(Volume v: volumes){
         double usableDiff = v.getAvailableSpaceRatio() - this.avgUsableRatio;
@@ -100,9 +112,12 @@ public class VolumeBalancerPolicy {
             farBelowAvgUsbale.add(source);
           }
         }
+        // report the usable diff with avg
+        volumeReport += String.format(" %+.5f",usableDiff);
       }
+      System.out.println(volumeReport);
       logUsableCollections();
-      LOG.info("underloadedBytes= "+ underloadedBytes +", overloadedBytes="+ overloadedBytes);
+      LOG.info("underloadedBytes= " + underloadedBytes + ", overloadedBytes=" + overloadedBytes);
       // return number of bytes to be moved in order to make the cluster balanced
       return Math.max(underloadedBytes, overloadedBytes);
 
@@ -114,16 +129,14 @@ public class VolumeBalancerPolicy {
   }
 
   /* log the 4 collections of volume */
-  private void logUsableCollections() {
+  protected void logUsableCollections() {
     logUsableCollection("farBelowAvgUsable", farBelowAvgUsbale);
-    if (LOG.isTraceEnabled()) {
-      logUsableCollection("thresholdBelowAvgUsable", thresholdBelowAvgUsable);
-      logUsableCollection("thresholdAboveAvgUsable", thresholdAboveAvgUsable);
-    }
+    logUsableCollection("thresholdBelowAvgUsable", thresholdBelowAvgUsable);
+    logUsableCollection("thresholdAboveAvgUsable", thresholdAboveAvgUsable);
     logUsableCollection("farAboveAvgUsable", farAboveAvgUsable);
   }
 
-  private static <T> void logUsableCollection(String name, SortedSet<T> items) {
+  protected static <T> void logUsableCollection(String name, SortedSet<T> items) {
     LOG.info(items.size() + " " + name + ": " + items);
   }
 
@@ -163,7 +176,7 @@ public class VolumeBalancerPolicy {
    * @param <G>
    * @param <C>
    */
-  private void chooseToMovePairs(TreeSet<Source> sources, TreeSet<Target> candidates, Dispatcher dispatcher) {
+  protected void chooseToMovePairs(TreeSet<Source> sources, TreeSet<Target> candidates, Dispatcher dispatcher) {
 
     //target should sortedBy AvgMove descending
     for(final Iterator<Target> j = candidates.descendingIterator(); j.hasNext();) {
@@ -176,7 +189,7 @@ public class VolumeBalancerPolicy {
       // source should sortedBy AngMove descending
       for (final Iterator<Source> i = sources.descendingIterator(); i.hasNext(); ) {
         final Source source = i.next();
-        Subdir subdir = source.findSuitableSubdirToMove(target.getVolume());
+        Subdir subdir = source.findBalanceSubdirToMove(target.getVolume());
         if(subdir==null||subdir.getSize()==0){
           continue;
         }else{

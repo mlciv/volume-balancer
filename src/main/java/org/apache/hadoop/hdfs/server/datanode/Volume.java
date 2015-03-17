@@ -130,7 +130,7 @@ public class Volume implements Comparable<Volume> {
     }
   }
 
-  public void addMovedDirAndUpdate(File addedDir,long movedDirSize,File fromDir){
+  public void addMovedDirAndUpdate(File addedDir,long movedDirSize,File fromDir,Volume fromVolume){
     if(simulateMode){
       for(Iterator<Subdir> it = subdirSet.iterator(); it.hasNext();){
         Subdir dir = it.next();
@@ -140,29 +140,44 @@ public class Volume implements Comparable<Volume> {
         }
       }
       //TODO: addedDir is not really exist, it will failed
-      //addSubdirsRecursively(addedDir);
-      String oriParent = fromDir.getParent();
-      String currentParent = addedDir.getParent();
+      //using addSubdirsRecursively(addedDir);
       LOG.info("adding Subdir recursively:"+ addedDir.getAbsolutePath());
       //listFilesAndDirs will include direcotory itself
-      Collection<File> dirs = FileUtils.listFilesAndDirs(fromDir, FalseFileFilter.INSTANCE, new IOFileFilter() {
-        @Override
-        public boolean accept(File file) {
-          return file.getName().startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
-        }
+      Collection<File> dirs = new ArrayList<File>();
+      if(fromDir.exists()) {
+        dirs = FileUtils.listFilesAndDirs(fromDir, FalseFileFilter.INSTANCE, new IOFileFilter() {
+          @Override
+          public boolean accept(File file) {
+            return file.getName().startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
+          }
 
-        @Override
-        public boolean accept(File dir, String name) {
-          return name.startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
+          @Override
+          public boolean accept(File dir, String name) {
+            return name.startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
+          }
+        });
+        for(File dir: dirs){
+          long subdirSize = FileUtils.sizeOfDirectory(dir);
+          String currentFilePath = dir.getAbsolutePath().replace(fromDir.getAbsolutePath(), addedDir.getAbsolutePath());
+          File newDir = new File(currentFilePath);
+          Subdir subdir = new Subdir(newDir,subdirSize);
+          subdirSet.add(subdir);
+          LOG.info("adding subdir report:"+ subdir.toString());
         }
-      });
-
-      for(File dir: dirs){
-        long subdirSize = FileUtils.sizeOfDirectory(dir);
-        File newDir = new File(currentParent,dir.getName());
-        Subdir subdir = new Subdir(newDir,subdirSize);
-        subdirSet.add(subdir);
-        LOG.info("adding subdir report:"+ subdir.toString());
+      }else{
+        //if not exist, check fromVolume's subdirSet
+        for(Iterator<Subdir> it = fromVolume.subdirSet.iterator(); it.hasNext();){
+          Subdir dir = it.next();
+          // is child of addedDir, increase added size
+          if(dir.getDir().getAbsolutePath().contains(fromDir.getAbsolutePath()+"/")){
+            long fileSize = dir.getSize();
+            String currentFilePath = dir.getDir().getAbsolutePath().replace(fromDir.getAbsolutePath(),addedDir.getAbsolutePath());
+            File currentChildPath = new File(currentFilePath);
+            Subdir subdir = new Subdir(currentChildPath,fileSize);
+            subdirSet.add(new Subdir(currentChildPath,fileSize));
+            LOG.info("adding subdir report:"+ subdir.toString());
+          }
+        }
       }
     }
   }
