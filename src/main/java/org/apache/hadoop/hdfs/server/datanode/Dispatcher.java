@@ -18,13 +18,14 @@ public class Dispatcher {
   private int concurrency = -1;
   private final List<PendingMove> pendingMoveList = new ArrayList<PendingMove>();
   private final ScheduledExecutorService progressReporter;
-  private long reportedChars = 0;
+  private int reportedLines;
+  public final static int CHARS_PER_LINE = 120;
 
   public Dispatcher(int concurrency) {
     this.concurrency = concurrency;
     this.moveExecutor = Executors.newFixedThreadPool(concurrency);
     this.progressReporter = Executors.newScheduledThreadPool(1);
-    this.reportedChars = 0;
+    this.reportedLines = 0;
   }
 
   public void addPendingMove(PendingMove move){
@@ -79,27 +80,35 @@ public class Dispatcher {
       @Override
       public void run() {
         if(pendingMoveList==null|| pendingMoveList.size()==0) return;
-        if(reportedChars !=0) {
-          for(int i =0;i<reportedChars;i++) {
-            System.out.print("\b");
+
+        if(reportedLines!=0){
+          for(int i=0;i<reportedLines;i++) {
+            System.out.print("\033[1A"); // Move up
+            System.out.print("\033[2K"); // Erase line content
           }
-          LOG.info("reportedCharsBefore="+reportedChars);
-          reportedChars = 0;
+          reportedLines=0;
         }
         System.out.flush();
-        for(PendingMove move:pendingMoveList){
-          String strBuf = move.getStatus()+"\n";
 
-          System.out.print(strBuf);
-          reportedChars +=strBuf.length(); // write 1 line per move.
+        for(PendingMove move:pendingMoveList){
+          String str = move.getStatus();
+          int start = 0;
+          int end = 0;
+          while(end<str.length()) {
+            start = end;
+            end = Math.min(str.length(),end+CHARS_PER_LINE);
+            //substring no include end.
+            System.out.print(str.substring(start,end)+"\n");
+            reportedLines += 1;
+          }
         }
-        LOG.info("reportedCharsEnd="+reportedChars);
         System.out.flush();
       }
     },5,5,TimeUnit.SECONDS);
 
     // Wait for all dispatcher threads to finish
     //TODO: waiting for copy?
+    // continue, not waiting util all submitted
     for (int k=0;k<futures.length;k++) {
       try {
         if(futures[k]!=null) {
@@ -131,20 +140,20 @@ public class Dispatcher {
     //when finished, inc the moved
     VolumeBalancerStatistics.getInstance().incBytesMoved(bytesMoved);
     progressReporter.shutdownNow();
-    reportedChars =0;
+    reportedLines =0;
     return bytesMoved;
   }
 
   public void reset(){
     this.pendingMoveList.clear();
-    reportedChars =0;
+    reportedLines =0;
   }
 
   /** shutdown thread pools */
   public void shutdownNow() {
     moveExecutor.shutdownNow();
     progressReporter.shutdownNow();
-    reportedChars = 0;
+    reportedLines =0;
   }
 
 }

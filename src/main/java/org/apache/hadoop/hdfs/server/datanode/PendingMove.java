@@ -94,8 +94,9 @@ public class PendingMove extends CopyProgressReporter implements Callable<Long>{
    * @throws IOException
    */
   public boolean submitAndClean() throws IOException{
-    FileUtils.deleteDirectory(new File(this.fromVolume.getHadoopV1BackupDir(),this.fromSubdir.getName()+"/"));
-    LOG.info(this.toSubdir.getAbsolutePath()+"copied, and clean the backup fromsubdir"+ this.fromSubdir.getAbsolutePath());
+    //FileUtils.deleteDirectory(new File(this.fromVolume.getHadoopV1BackupDir(),this.fromSubdir.getName()+"/"));
+    FileUtils.deleteDirectory(this.fromSubdir);
+    LOG.info(this.toSubdir.getAbsolutePath()+" copied, and clean the fromsubdir "+ this.fromSubdir.getAbsolutePath());
     return false;
   }
 
@@ -124,7 +125,7 @@ public class PendingMove extends CopyProgressReporter implements Callable<Long>{
 
   public void updateContextStatus(File srcFile, File desFile, long totalBytesRead,long targetLenth,long updatedSize) {
     this.copiedTotalBytes += updatedSize;
-    StringBuilder message = new StringBuilder(String.format("[%s]====>[%s]\t %.2f %% of [%s]",this.fromSubdir,this.toSubdir,this.copiedTotalBytes*100.0f/fromSubdirSize,FileUtils.byteCountToDisplaySize(this.fromSubdirSize)));
+    StringBuilder message = new StringBuilder(String.format("[%s]==>[%s]\t%.2f%% of [%s]",this.fromSubdir,this.toSubdir,this.copiedTotalBytes*100.0f/fromSubdirSize,FileUtils.byteCountToDisplaySize(this.fromSubdirSize)));
     message.append(String.format("Copying %s to %s",srcFile.getAbsolutePath(),desFile.getAbsolutePath())).append(" [")
             .append(FileUtils.byteCountToDisplaySize(totalBytesRead))
             .append('/')

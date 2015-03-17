@@ -45,7 +45,7 @@ public class VolumeBalancerStatistics {
       }
       pw = new PrintWriter(new BufferedWriter(new FileWriter(vbUndoLog,true)));
       SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-      pw.append(String.format(df.format(new Date()) + "\t%s\t%d\t%s\n",move.fromSubdir.getAbsolutePath(),move.fromSubdirSize));
+      pw.append(String.format(df.format(new Date()) + "\t%s\t%d\t%s\n",move.fromSubdir.getAbsolutePath(),move.fromSubdirSize,move.toSubdir.getAbsolutePath()));
     }catch(Exception ex){
       LOG.info("write to UndoLog failed"+ ExceptionUtils.getFullStackTrace(ex));
     }finally {
