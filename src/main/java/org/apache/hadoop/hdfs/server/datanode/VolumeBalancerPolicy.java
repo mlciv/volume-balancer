@@ -4,7 +4,6 @@ import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.log4j.Logger;
 
 import java.io.IOException;
-import java.text.DecimalFormat;
 import java.util.*;
 
 /**
@@ -19,6 +18,10 @@ public class VolumeBalancerPolicy {
 
   protected double avgUsableRatio = 0.0;
   protected double threshold = 0.0;
+  protected boolean simulateMode = true;
+  protected long beingMoved = 0;
+
+  protected int iteration = 0;
   //4 set should all sorted by descending
   protected final TreeSet<Source> farBelowAvgUsbale = new TreeSet<Source>();
   protected final TreeSet<Source> thresholdBelowAvgUsable = new TreeSet<Source>();
@@ -32,15 +35,21 @@ public class VolumeBalancerPolicy {
     overloadedBytes = 0;
     underloadedBytes = 0;
     this.threshold = 0;
+    this.simulateMode = true;
+    this.beingMoved = 0;
+    this.iteration = 0;
   }
 
-  public VolumeBalancerPolicy(double threshold){
+  public VolumeBalancerPolicy(double threshold,boolean simulateMode,int iteration){
     totalCapacity = 0;
     totalUsableSpace = 0;
     avgUsableRatio = 0;
     overloadedBytes = 0;
     underloadedBytes = 0;
     this.threshold = threshold;
+    this.simulateMode = simulateMode;
+    this.beingMoved = 0;
+    this.iteration = iteration;
   }
 
   public void reset(){
@@ -53,6 +62,8 @@ public class VolumeBalancerPolicy {
     avgUsableRatio = 0;
     totalCapacity = 0;
     totalUsableSpace = 0;
+    beingMoved = 0;
+    iteration = 0;
   }
 
   public void accumulateSpaces(final List<Volume> volumes) throws IOException{
@@ -73,7 +84,7 @@ public class VolumeBalancerPolicy {
   public long initAvgUsable(final List<Volume> volumes) {
     LOG.info("Begin to initAvgUsable in VolumeBalancer...");
     this.avgUsableRatio = totalUsableSpace/totalCapacity;
-    String volumeReport = String.format("%.5f+/-%.5f",this.avgUsableRatio,this.threshold);
+    String volumeReport = String.format("%.3f+/-%.3f",this.avgUsableRatio*100,this.threshold*100);
     try{
       for(Volume v: volumes){
         double usableDiff = v.getAvailableSpaceRatio() - this.avgUsableRatio;
@@ -113,7 +124,7 @@ public class VolumeBalancerPolicy {
           }
         }
         // report the usable diff with avg
-        volumeReport += String.format(" %+.5f",usableDiff);
+        volumeReport += String.format(" %+.3f%%",usableDiff*100);
       }
       System.out.println(volumeReport);
       logUsableCollections();
@@ -163,7 +174,7 @@ public class VolumeBalancerPolicy {
 
     chooseToMovePairs(thresholdBelowAvgUsable,thresholdAboveAvgUsable, dispatcher);
 
-    return dispatcher.getBytesBeingMoved();
+    return this.beingMoved;
   }
 
 
@@ -223,12 +234,25 @@ public class VolumeBalancerPolicy {
         //choose this bestDir for target, remove the bestSource.
         LOG.info("bestDir="+bestDir.toString());
         sources.remove(bestSource);
-        bestSource.setFile(bestDir.getDir());
-        bestSource.setFileSize(bestDir.getSize());
-        target.setFile(target.chooseTargetSubdir());
+        j.remove();
+        bestSource.setSubdir(bestDir);
+        bestSource.setSubdirSize(bestDir.getSize());
+        Subdir targetDir = target.chooseTargetSubdir();
+        if(targetDir!=null) {
+          target.setSubdir(targetDir);
+        }else{
+          LOG.info("no available target dir can be used");
+          return;
+        }
         //TODO: add to pending move.
-        PendingMove move = new PendingMove(bestSource,target);
+        SubdirMove move = null;
+        if(this.simulateMode){
+          move = new SimulateSubdirMove(bestSource,target,this.iteration);
+        }else {
+          move = new SubdirMove(bestSource, target,this.iteration);
+        }
         dispatcher.addPendingMove(move);
+        beingMoved+=move.fromSubdirSize;
       }else{
         // suitable subdir for this target, by block
         // TODO: byblock

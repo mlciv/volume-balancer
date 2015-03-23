@@ -1,6 +1,5 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
-import java.io.File;
 import java.util.SortedSet;
 
 /**
@@ -9,13 +8,13 @@ import java.util.SortedSet;
 public class Source implements Comparable<Source>{
   private static final org.apache.log4j.Logger LOG = org.apache.log4j.Logger.getLogger(Source.class);
   private Volume volume;
-  private File file;
-  private long fileSize;
+  private Subdir subdir;
+  private long subdirSize;
 
   public Source(Volume v){
      this.volume = v;
-     this.file = null;
-     this.fileSize = -1;
+     this.subdir = null;
+     this.subdirSize = -1;
   }
 
   public Volume getVolume() {
@@ -26,25 +25,25 @@ public class Source implements Comparable<Source>{
     this.volume = volume;
   }
 
-  public File getFile() {
-    return file;
+  public Subdir getSubdir() {
+    return subdir;
   }
 
-  public void setFile(File file) {
-    this.file = file;
+  public void setSubdir(Subdir subdir) {
+    this.subdir = subdir;
   }
 
-  public long getFileSize() {
-    return fileSize;
+  public long getSubdirSize() {
+    return subdirSize;
   }
 
-  public void setFileSize(long fileSize) {
-    this.fileSize = fileSize;
+  public void setSubdirSize(long subdirSize) {
+    this.subdirSize = subdirSize;
   }
 
   @Override
   public String toString(){
-    return "file="+ ((file==null)?"toDecide":file.getAbsolutePath())+", fileSize="+fileSize+","+this.volume.toString();
+    return "subdir="+ ((subdir ==null)?"toDecide": subdir.getDir().getAbsolutePath())+", subdirSize="+ subdirSize +","+this.volume.toString();
   }
 
   @Override
@@ -117,14 +116,14 @@ public class Source implements Comparable<Source>{
     Subdir maxTargetSubdir = new Subdir(null,Math.min(target.getMaxMove(),maxDir.getSize()));
 
     if(target.getMinMove() > maxDir.getSize()){
-      // target cannot be filled by only one file.
+      // target cannot be filled by only one subdir.
       if(LOG.isDebugEnabled()) {
-        LOG.debug(String.format("TargetVolume[%s] cannot filled by one file,return maxDir[%s]", target.toString(), maxDir.toString()));
+        LOG.debug(String.format("TargetVolume[%s] cannot filled by one subdir,return maxDir[%s]", target.toString(), maxDir.toString()));
       }
-      // choose the max file for greedy.
+      // choose the max subdir for greedy.
       return maxDir;
     }else {
-      // cannot fill with one file.
+      // cannot fill with one subdir.
       // search the Set, find a suitable subdir to move, for moving as few as possible.
       SortedSet<Subdir> suitableSet = availblesSubdirs.subSet(minTargetSubdir,maxTargetSubdir);
       if(suitableSet.size()==0){

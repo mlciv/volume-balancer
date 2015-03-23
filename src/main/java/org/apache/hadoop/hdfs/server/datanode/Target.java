@@ -1,10 +1,7 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 import java.io.File;
-import java.io.FileFilter;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 /**
  * Created by Jiessie on 11/3/15.
@@ -12,11 +9,11 @@ import java.util.List;
 public class Target implements Comparable<Target>{
   private static final org.apache.log4j.Logger LOG = org.apache.log4j.Logger.getLogger(Target.class);
   private Volume volume;
-  private File file;
+  private Subdir subdir;
 
   public Target(Volume v){
     this.volume = v;
-    this.file = null;
+    this.subdir = null;
   }
 
   public Volume getVolume() {
@@ -27,12 +24,12 @@ public class Target implements Comparable<Target>{
     this.volume = volume;
   }
 
-  public File getFile() {
-    return file;
+  public Subdir getSubdir() {
+    return subdir;
   }
 
-  public void setFile(File file) {
-    this.file = file;
+  public void setSubdir(Subdir subdir) {
+    this.subdir = subdir;
   }
 
   @Override
@@ -64,98 +61,41 @@ public class Target implements Comparable<Target>{
 
   @Override
   public String toString(){
-    return "file="+ ((file==null)?"toDecide":file.getAbsolutePath())+", "+this.volume.toString();
+    return "subdir="+ ((subdir ==null)?"toDecide": subdir.getDir().getAbsolutePath())+", "+this.volume.toString();
   }
 
-  private boolean hasAvailableSeat(File subdir, long maxBlocksPerDir) {
-    final File[] existingSubdirs = Volume.findSubdirs(subdir);
-    return existingSubdirs.length < maxBlocksPerDir;
-  }
 
-  private File findRandomSubdirWithAvailableSeat(File parent, long maxBlocksPerDir) {
-    File[] subdirsArray = Volume.findSubdirs(parent);
-    if (subdirsArray == null) {
-      return null;
-    }
-    List<File> subdirs = Arrays.asList(subdirsArray);
-    Collections.shuffle(subdirs);
-
-    for (File subdir : subdirs) {
-      if (hasAvailableSeat(subdir, maxBlocksPerDir)) {
-        return subdir;
-      }
-    }
-    return null;
-  }
-
-  public File chooseTargetSubdir(){
-    File subdirParent = getAvailableSubdirParent();
-    String subdirName = nextSubdir(subdirParent, DataStorage.BLOCK_SUBDIR_PREFIX);
-    File targetSubdir = new File(subdirParent,subdirName);
+  public Subdir chooseTargetSubdir(){
+    Subdir subdirParent = getShuffledAvailableSubdirParentBFS();
+    if(subdirParent==null) return null;
+    String subdirName = subdirParent.getAvailableSubdirName(DataStorage.BLOCK_SUBDIR_PREFIX,VolumeBalancer.maxBlocksPerDir);
+    Subdir targetSubdir = new Subdir(new File(subdirParent.getDir(),subdirName),-1);
+    targetSubdir.setParent(subdirParent);
     return targetSubdir;
-  }
-
-  /**
-   * get the largest index of the subdir
-   * @param dir
-   * @param subdirPrefix
-   * @return
-   */
-  public String nextSubdir(File dir, final String subdirPrefix) {
-    File[] existing = dir.listFiles(new FileFilter() {
-      @Override
-      public boolean accept(File pathname) {
-        return pathname.getName().startsWith(subdirPrefix);
-      }
-    });
-    if (existing == null || existing.length == 0)
-      return subdirPrefix + "0";
-
-    //  listFiles doesn't guarantee ordering
-    int lastIndex = -1;
-    for (int i = 0; i < existing.length; i++) {
-      String name = existing[i].getName();
-      try {
-        int index = Integer.parseInt(name.substring(subdirPrefix.length()));
-        if (lastIndex < index)
-          lastIndex = index;
-      } catch (NumberFormatException e) {
-        // ignore
-      }
-    }
-    return subdirPrefix + (lastIndex + 1);
   }
 
   /**
    * choose the subdir parent, where we can copy the most subdir there.
    * @return
    */
-  public File getAvailableSubdirParent(){
-    final File finalizedLeastUsedBlockStorage = this.volume.getHadoopV1CurrentDir();
+  public Subdir getShuffledAvailableSubdirParentBFS(){
+    final Subdir availableRootDir = this.volume.getRootDir();
 
-    File leastUsedBlockSubdirParent = finalizedLeastUsedBlockStorage;
-
-    // Try to store the subdir in the finalized folder first.
-    if (!hasAvailableSeat(leastUsedBlockSubdirParent, VolumeBalancer.getMaxBlocksPerDir())) {
-      File tmpLeastUsedBlockSubdir = null;
-      int depth = 0;
-      do {
-        tmpLeastUsedBlockSubdir = findRandomSubdirWithAvailableSeat(leastUsedBlockSubdirParent, VolumeBalancer.getMaxBlocksPerDir());
-
-        if (tmpLeastUsedBlockSubdir != null) {
-          leastUsedBlockSubdirParent = tmpLeastUsedBlockSubdir;
-        } else {
-          depth++;
-          if (depth > 2) {
-            // don't do too deep in folders hierarchy.
-            leastUsedBlockSubdirParent = this.volume.getRandomSubdir(finalizedLeastUsedBlockStorage);
-          } else {
-            leastUsedBlockSubdirParent = this.volume.getRandomSubdir(leastUsedBlockSubdirParent);
+    LinkedList<Subdir> bfsQueue = new LinkedList<Subdir>();
+    bfsQueue.offer(availableRootDir);
+    while(!bfsQueue.isEmpty()){
+      Subdir tmpDir = bfsQueue.poll();
+      if(tmpDir.hasAvailableSeat(VolumeBalancer.maxBlocksPerDir)){
+        return tmpDir;
+      }else{
+        List<Subdir> shuffledChildSubdirs = tmpDir.findShuffledSubdirsWithAvailableSeat(VolumeBalancer.maxBlocksPerDir);
+        if(shuffledChildSubdirs!=null) {
+          for (Subdir dir : shuffledChildSubdirs) {
+            bfsQueue.offer(dir);
           }
         }
       }
-      while (tmpLeastUsedBlockSubdir == null);
     }
-    return leastUsedBlockSubdirParent;
+    return null;
   }
 }

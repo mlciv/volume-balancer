@@ -18,9 +18,8 @@ public class Volume implements Comparable<Volume> {
 
   private static final Logger LOG = Logger.getLogger(Volume.class);
   private final URI uri;
-  private final File uriFile;
+  private final Subdir rootDir;
   private static final Random r = new Random();
-  private final boolean simulateMode;
   private long usableSpace;
   private long minMove = -1;
   private long maxMove = -1;
@@ -30,31 +29,41 @@ public class Volume implements Comparable<Volume> {
   // we only index the total subdirs and its size
   private final SortedSet<Subdir> subdirSet = new TreeSet<Subdir>();
 
+  public URI getUri() {
+    return uri;
+  }
 
   public SortedSet<Subdir> getSubdirSet() {
     return subdirSet;
   }
 
+
   Volume(final URI uri) {
     this.uri = uri;
-    this.uriFile = new File(this.uri);
-    this.simulateMode = false;
     this.usableSpace = -1;
+    this.rootDir = new Subdir(new File(new File(this.uri), Storage.STORAGE_DIR_CURRENT + "/"),-1);
     this.minMove = -1;
     this.maxMove = -1;
     this.avgMove = -1;
   }
 
-  Volume(final URI uri, boolean mode) {
-    this.uri = uri;
-    this.uriFile = new File(this.uri);
-    this.simulateMode = mode;
-    this.usableSpace = -1;
-    this.minMove = -1;
-    this.maxMove = -1;
-    this.avgMove = -1;
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) return true;
+    if (!(o instanceof Volume)) return false;
+
+    Volume volume = (Volume) o;
+
+    if (!uri.equals(volume.uri)) return false;
+
+    return true;
   }
 
+  @Override
+  public int hashCode() {
+    return uri.hashCode();
+  }
 
   public long getAvgMove() {
     return avgMove;
@@ -105,145 +114,48 @@ public class Volume implements Comparable<Volume> {
   }
 
   /**
-   * init usableSpace and subdirs
+   * init usableSpace and subdirs, only once, the later one are simulated
    */
   public void init(){
-    this.usableSpace = uriFile.getUsableSpace();
+    this.usableSpace = this.rootDir.getDir().getUsableSpace();
+    this.rootDir.setSize(this.usableSpace);
     this.subdirSet.clear();
-    this.addSubdirsRecursively(this.getHadoopV1CurrentDir());
+    Subdir currentRootDir = new Subdir(this.getRootDir().getDir(),this.getUsableSpace());
+    // rootDir's parent == null
+    currentRootDir.setParent(null);
+    this.mirrorChildSubdirs(currentRootDir);
     LOG.info("volume initilzed usablespace and subdirSet");
   }
 
-  public void removeMovedDirAndUpdate(File movedDir,long movedDirSize){
-    if(simulateMode){
-      for(Iterator<Subdir> it = subdirSet.iterator(); it.hasNext();){
-        Subdir dir = it.next();
-        // is child or itself of movedDir,remove
-        if(dir.getDir().getAbsolutePath().contains(movedDir.getAbsolutePath()+"/")||dir.getDir().getAbsolutePath()==movedDir.getAbsolutePath()){
-          it.remove();
-        }
-        // is parent of movedDir, decrease size
-        else if(movedDir.getAbsolutePath().contains(dir.getDir().getAbsolutePath()+"/")){
-          dir.setSize(dir.getSize()-movedDirSize);
-        }
-      }
+  public void mirrorChildSubdirs(Subdir parentSubdir){
+    File[] subdirs = findSubdirs(parentSubdir.getDir());
+    if(subdirs==null||subdirs.length==0) return ;
+    for(File childDir:subdirs){
+      Subdir childSubDir = new Subdir(childDir,FileUtils.sizeOfDirectory(childDir));
+      //set parent
+      childSubDir.setParent(parentSubdir);
+      parentSubdir.getChild().add(childSubDir);
+      this.subdirSet.add(childSubDir);// not add the RootDir
+      LOG.info("adding subdir="+childSubDir.toString());
+      mirrorChildSubdirs(childSubDir);
     }
   }
-
-  public void addMovedDirAndUpdate(File addedDir,long movedDirSize,File fromDir,Volume fromVolume){
-    if(simulateMode){
-      for(Iterator<Subdir> it = subdirSet.iterator(); it.hasNext();){
-        Subdir dir = it.next();
-        // is parent of addedDir, increase added size
-        if(addedDir.getAbsolutePath().contains(dir.getDir().getAbsolutePath()+"/")){
-          dir.setSize(dir.getSize()+ movedDirSize);
-        }
-      }
-      //TODO: addedDir is not really exist, it will failed
-      //using addSubdirsRecursively(addedDir);
-      LOG.info("adding Subdir recursively:"+ addedDir.getAbsolutePath());
-      //listFilesAndDirs will include direcotory itself
-      Collection<File> dirs = new ArrayList<File>();
-      if(fromDir.exists()) {
-        dirs = FileUtils.listFilesAndDirs(fromDir, FalseFileFilter.INSTANCE, new IOFileFilter() {
-          @Override
-          public boolean accept(File file) {
-            return file.getName().startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
-          }
-
-          @Override
-          public boolean accept(File dir, String name) {
-            return name.startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
-          }
-        });
-        for(File dir: dirs){
-          long subdirSize = FileUtils.sizeOfDirectory(dir);
-          String currentFilePath = dir.getAbsolutePath().replace(fromDir.getAbsolutePath(), addedDir.getAbsolutePath());
-          File newDir = new File(currentFilePath);
-          Subdir subdir = new Subdir(newDir,subdirSize);
-          subdirSet.add(subdir);
-          LOG.info("adding subdir report:"+ subdir.toString());
-        }
-      }else{
-        //if not exist, check fromVolume's subdirSet
-        for(Iterator<Subdir> it = fromVolume.subdirSet.iterator(); it.hasNext();){
-          Subdir dir = it.next();
-          // is child of addedDir, increase added size
-          if(dir.getDir().getAbsolutePath().contains(fromDir.getAbsolutePath()+"/")){
-            long fileSize = dir.getSize();
-            String currentFilePath = dir.getDir().getAbsolutePath().replace(fromDir.getAbsolutePath(),addedDir.getAbsolutePath());
-            File currentChildPath = new File(currentFilePath);
-            Subdir subdir = new Subdir(currentChildPath,fileSize);
-            subdirSet.add(new Subdir(currentChildPath,fileSize));
-            LOG.info("adding subdir report:"+ subdir.toString());
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * inclued addedDir itself, if addedDir is "subdirX"
-   * @param addedDir
-   */
-  public void addSubdirsRecursively(File addedDir){
-    LOG.info("adding Subdir recursively:"+ addedDir.getAbsolutePath());
-    Collection<File> dirs = FileUtils.listFilesAndDirs(addedDir, FalseFileFilter.INSTANCE, new IOFileFilter() {
-      @Override
-      public boolean accept(File file) {
-        return file.getName().startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
-      }
-
-      @Override
-      public boolean accept(File dir, String name) {
-        return name.startsWith(DataStorage.BLOCK_SUBDIR_PREFIX);
-      }
-    });
-
-    //remove the addedDir itself if not "SubdirX"
-    if(!addedDir.getName().startsWith(DataStorage.BLOCK_SUBDIR_PREFIX)){
-      dirs.remove(addedDir);
-    }
-    for(File dir: dirs){
-      long subdirSize = FileUtils.sizeOfDirectory(dir);
-      Subdir subdir = new Subdir(dir,subdirSize);
-      subdirSet.add(subdir);
-      LOG.info("adding subdir report:"+ subdir.toString());
-    }
-  }
-
 
   //for simulate, need to simulate the space avaible decrease when moving.
   public void setUsableSpace(long usableSpace) {
-    if (simulateMode) {
-      this.usableSpace = usableSpace;
-    }
+    this.usableSpace = usableSpace;
   }
 
   public long getUsableSpace(){
-    if (simulateMode) {
-      return this.usableSpace;
-    } else {
-      // getUsableSpace is more accurate than getFreeSpace.
-      return uriFile.getUsableSpace();
-    }
+    return this.usableSpace;
   }
 
   public long getTotalCapacity(){
-    return uriFile.getTotalSpace();
+    return this.rootDir.getDir().getTotalSpace();
   }
 
   public double getAvailableSpaceRatio() {
     return (double)getUsableSpace() / getTotalCapacity();
-  }
-
-  public File getHadoopV2BackupDir(){
-    return this.uriFile;
-  }
-
-  public File getHadoopV2CurrentDir(){
-    //TODO: getPoolId
-    return this.uriFile;
   }
 
 //  private static String getBlockPoolID(Configuration conf) throws IOException {
@@ -262,12 +174,8 @@ public class Volume implements Comparable<Volume> {
 //            + Storage.STORAGE_DIR_CURRENT + "/" + DataStorage.STORAGE_DIR_FINALIZED);
 //    }
 
-  public File getHadoopV1BackupDir(){
-    return this.uriFile;
-  }
-
-  public File getHadoopV1CurrentDir() {
-    return new File(new File(this.uri), Storage.STORAGE_DIR_CURRENT + "/");
+  public Subdir getRootDir() {
+    return this.rootDir;
   }
 
   @Override
@@ -288,16 +196,4 @@ public class Volume implements Comparable<Volume> {
       }
     });
   }
-
-  //How to choose the random subdir.
-  public static File getRandomSubdir(File parent) {
-
-    File[] files = findSubdirs(parent);
-    if (files == null || files.length == 0) {
-      return null;
-    } else {
-      return files[r.nextInt(files.length)];
-    }
-  }
-
 }

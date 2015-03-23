@@ -23,7 +23,7 @@ $ java -cp /opt/volume-balancer/lib/volume-balancer-<version>.jar:/path/to/hdfs-
 
 ## With CDH
 
-Cloudera is splitting the configuration files and store in _/etc/hadoop/conf_ only strict minimum. ``dfs.datanode.data.dir`` for instance is not found in _/etc/hadoop/conf/hdfs-site.xml_ so a workaround needs to be put in place. Moreover, once you found the proper _/var/run/cloudera-scm-agent/process_ folder to add in your classpath, you need to skip the _log4j.properties_ file shipped otherwise you'll start a custom proprietary logger. A helper script is given in _src/main/scripts_ folder, which run the balancer in CDH distributions.
+Cloudera is splitting the configuration files and store in _/etc/hadoop/conf_ only strict minimum. ``dfs.datanode.data.dir`` for instance is not found in _/etc/hadoop/conf/hdfs-site.xml_ so a workaround needs to be put in place. Moreover, once you found the proper _/var/run/cloudera-scm-agent/process_ folder to add in your classpath, you need to skip the _log4j.properties_ subdir shipped otherwise you'll start a custom proprietary logger. A helper script is given in _src/main/scripts_ folder, which run the balancer in CDH distributions.
 
 ```
 $ /opt/volume-balancer/bin/cdh-balance-local-volumes.sh [-threshold=0.1] [-concurrency=1]

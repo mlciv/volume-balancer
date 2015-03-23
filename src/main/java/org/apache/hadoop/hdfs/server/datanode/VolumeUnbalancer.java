@@ -5,6 +5,8 @@ import org.apache.hadoop.util.StringUtils;
 import org.apache.log4j.Logger;
 
 import java.io.IOException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Created by Jiessie on 13/3/15.
@@ -23,51 +25,52 @@ public class VolumeUnbalancer extends VolumeBalancer{
 
   public static int run(double threshold, int concurrency, boolean simulateMode, boolean interative)
   {
+    LOG.info("start run volume unbalancer ...");
     boolean done = false;
     VolumeBalancerStatistics vbs = VolumeBalancerStatistics.getInstance();
-    System.out.println("Time Stamp               Iteration#  Bytes Already Moved  Bytes Left To Move  Bytes Being Moved");
+    final VolumeUnbalancer vub =  new VolumeUnbalancer(threshold,concurrency,simulateMode,interative);
+    vub.setVbStatistics(vbs);
+    if(!vub.initAndUpdateVolumes()){
+      LOG.fatal("Failed to initAndUpdateVolumes volume data, exit");
+      System.exit(3);
+    }
+    Future<Long> futureOfDispatcher = vub.dispachterService.submit(vub.dispatcher);
     try{
       for(int iteration = 0;!done;iteration++){
         done = true;
-        final VolumeUnbalancer vub =  new VolumeUnbalancer(threshold,concurrency,simulateMode,interative);
-        vub.setVbStatistics(vbs);
-        if(!vub.initAndUpdateVolumes()){
-          LOG.fatal("Failed to initAndUpdateVolumes volume data, exit");
-          System.exit(3);
-        }
-        final Result r = vub.runOneInteration();
-        r.print(iteration, System.out);
+
+        Result r = vub.runOneInteration(iteration);
+        vub.dispatcher.addIterationResult(r);
 
         // clean all lists
-        vub.resetData();
+        vub.resetPolicyData();
         if (r.exitStatus == ExitStatus.IN_PROGRESS) {
           done = false;
         } else if (r.exitStatus != ExitStatus.SUCCESS) {
-          //must be an error statue, return.
-          return r.exitStatus.getExitCode();
+          break;
         }
       }
-
+      //waiting for move thead
+      //long bytesMoved = futureOfDispatcher.get();
+      vub.gracefulShutdown();
+      LOG.info("stop run volume unbalancer ...");
     }catch(Exception ex){
       LOG.error("failed to run volume unbalancer"+ ExceptionUtils.getFullStackTrace(ex));
-    }finally {
-      if(!simulateMode) {
-        vbs.reset();
-      }
-      vbs.resetForUnbalance();
+      vub.gracefulShutdown();
+      LOG.info("stop run volume balancer ...");
     }
     return ExitStatus.SUCCESS.getExitCode();
   }
 
   @Override
-  protected Result runOneInteration() {
+  protected Result runOneInteration(int iteration) {
     try {
-      vubPolicy = new VolumeUnbalancerPolicy(threshold);
+      vubPolicy = new VolumeUnbalancerPolicy(threshold,this.simulateMode,iteration);
       vubPolicy.accumulateSpaces(vbStatistics.getAllVolumes());
       final long bytesLeftToMove = vubPolicy.initAvgUsable(vbStatistics.getAllVolumes());
       if (bytesLeftToMove == 0) {
-        System.out.println("The datanode is unbalanced. No need to unbalance. Exiting...");
-        return newResult(ExitStatus.SUCCESS, bytesLeftToMove, -1);
+        System.out.println("The datanode is unbalanced. No need to unbalance. Exiting SimulateMode...");
+        return newResult(ExitStatus.SUCCESS, bytesLeftToMove, -1,iteration);
       } else {
         LOG.info("Need to move " + StringUtils.byteDesc(bytesLeftToMove)
                 + " to make the cluster balanced.");
@@ -80,35 +83,20 @@ public class VolumeUnbalancer extends VolumeBalancer{
        */
       final long bytesBeingMoved = vubPolicy.chooseToMovePairs(dispatcher);
       if (bytesBeingMoved == 0) {
-        System.out.println("No block can be moved. Exiting...");
-        return newResult(ExitStatus.NO_MOVE_BLOCK, bytesLeftToMove, bytesBeingMoved);
+        System.out.println("No block can be moved. Exiting SimulateMode...");
+        return newResult(ExitStatus.NO_MOVE_BLOCK, bytesLeftToMove, bytesBeingMoved,iteration);
       } else {
         LOG.info( "Will move " + StringUtils.byteDesc(bytesBeingMoved) +
                 " in this iteration");
       }
 
-      /* For each pair of <fromSubdir, target>, start a thread that repeatedly
-       * decide a block to be moved and its proxy fromSubdir,
-       * then initiates the move until all bytes are moved or no more block
-       * available to move.
-       * Exit no byte has been moved for 5 consecutive iterations.
-       */
-      if (!dispatcher.dispatchAndCheckContinue(this)) {
-        return newResult(ExitStatus.NO_MOVE_PROGRESS, bytesLeftToMove, bytesBeingMoved);
-      }
-
-      return newResult(ExitStatus.IN_PROGRESS, bytesLeftToMove, bytesBeingMoved);
+      return newResult(ExitStatus.IN_PROGRESS, bytesLeftToMove, bytesBeingMoved,iteration);
     } catch (IllegalArgumentException e) {
       System.out.println(ExceptionUtils.getFullStackTrace(e) + ".  Exiting ...");
-      return newResult(ExitStatus.ILLEGAL_ARGUMENTS);
+      return newResult(ExitStatus.ILLEGAL_ARGUMENTS,iteration);
     } catch (IOException e) {
       System.out.println(ExceptionUtils.getFullStackTrace(e) + ".  Exiting ...");
-      return newResult(ExitStatus.IO_EXCEPTION);
-    } catch (InterruptedException e) {
-      System.out.println(ExceptionUtils.getFullStackTrace(e) + ".  Exiting ...");
-      return newResult(ExitStatus.INTERRUPTED);
-    } finally {
-      dispatcher.shutdownNow();
+      return newResult(ExitStatus.IO_EXCEPTION,iteration);
     }
   }
 }

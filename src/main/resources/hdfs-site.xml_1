@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
 
-<!-- Put site-specific property overrides in this file. -->
+<!-- Put site-specific property overrides in this subdir. -->
 
 <configuration>
 
@@ -81,7 +81,7 @@
 
 <!--
 <property>
-  <name>dfs.namenode.keytab.file</name>
+  <name>dfs.namenode.keytab.subdir</name>
   <value>/opt/sohuhadoop/conf/hadoopmc.keytab</value> 
 </property>
 <property>
@@ -109,7 +109,7 @@
   <value>50495</value>
 </property>
 <property>
-  <name>dfs.secondary.namenode.keytab.file</name>
+  <name>dfs.secondary.namenode.keytab.subdir</name>
   <value>/opt/sohuhadoop/conf/hadoopmc.keytab</value>
 </property>
 <property>
@@ -138,7 +138,7 @@
 
 <!--
 <property>
-  <name>dfs.datanode.keytab.file</name>
+  <name>dfs.datanode.keytab.subdir</name>
   <value>/opt/sohuhadoop/conf/hadoopmc.keytab</value>
 </property>
 <property>

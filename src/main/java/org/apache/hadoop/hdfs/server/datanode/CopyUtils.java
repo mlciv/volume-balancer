@@ -27,7 +27,7 @@ public class CopyUtils {
    * @throws java.io.IOException
    */
   public static void copyDirectory(File srcDir, File destDir,
-                                   FileFilter filter, boolean preserveFileDate,CopyProgressReporter reporter) throws IOException {
+                                   FileFilter filter, boolean preserveFileDate,CopyProgressTracker reporter) throws IOException {
     if (srcDir == null) {
       throw new NullPointerException("Source must not be null");
     }
@@ -60,7 +60,7 @@ public class CopyUtils {
   }
 
   private static void doCopyDirectory(File srcDir, File destDir, FileFilter filter,
-                                      boolean preserveFileDate, List<String> exclusionList,CopyProgressReporter reporter) throws IOException {
+                                      boolean preserveFileDate, List<String> exclusionList,CopyProgressTracker reporter) throws IOException {
     // recurse
     File[] srcFiles = filter == null ? srcDir.listFiles() : srcDir.listFiles(filter);
     if (srcFiles == null) {  // null if abstract pathname does not denote a directory, or if an I/O error occurs
@@ -95,7 +95,7 @@ public class CopyUtils {
     }
   }
 
-  private static void doCopyFileWithProgress(File srcFile, File destFile, boolean preserveFileDate,CopyProgressReporter reporter) throws IOException {
+  private static void doCopyFileWithProgress(File srcFile, File destFile, boolean preserveFileDate,CopyProgressTracker reporter) throws IOException {
     if (destFile.exists() && destFile.isDirectory()) {
       throw new IOException("Destination '" + destFile + "' exists but is a directory");
     }

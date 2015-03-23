@@ -11,12 +11,14 @@ import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Created by Jiessie on 10/3/15.
  */
 public class VBUtils {
   private static final Logger LOG = Logger.getLogger(VBUtils.class);
+  public static final long AWAIT_TERMINATION_TIME = 1; // minutes
 
 
   static Collection<URI> getStorageDirs(Configuration conf) {

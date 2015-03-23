@@ -1,6 +1,7 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 import org.apache.commons.lang.exception.ExceptionUtils;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.log4j.Logger;
 
 import java.util.Iterator;
@@ -17,13 +18,16 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
   protected final TreeSet<Source> thresholdAboveUnbalanceAvgUsable = new TreeSet<Source>();
   protected final TreeSet<Source> farAboveUnbalanceAvgUsable = new TreeSet<Source>();
 
-  public VolumeUnbalancerPolicy(double threshold){
+  public VolumeUnbalancerPolicy(double threshold,boolean simulateMode,int iteration){
     totalCapacity = 0;
     totalUsableSpace = 0;
     avgUsableRatio = 0;
     overloadedBytes = 0;
     underloadedBytes = 0;
     this.threshold = threshold;
+    this.simulateMode = simulateMode;
+    this.beingMoved = 0;
+    this.iteration = iteration;
   }
 
   @Override
@@ -37,7 +41,7 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
 
     chooseToMovePairs(farAboveUnbalanceAvgUsable,farBelowUnbalanceAvgUsbale, dispatcher);
 
-    return dispatcher.getBytesBeingMoved();
+    return this.beingMoved;
   }
 
   @Override
@@ -52,7 +56,9 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
   protected void chooseToMovePairs(TreeSet<Source> sources, TreeSet<Target> candidates, Dispatcher dispatcher) {
     // let below more below, above more above
     //target should sortedBy AvgMove descending
-    for(final Iterator<Target> j = candidates.descendingIterator(); j.hasNext();) {
+    //TODO: If descending, then one of the bigger one will become largest one, and the largest one, which is not suitable for balance paralltest
+    //using ascending order
+    for(final Iterator<Target> j = candidates.iterator(); j.hasNext();) {
       final Target target = j.next();
       Subdir bestDir = null;
       Source bestSource = null;
@@ -80,12 +86,20 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
         //choose this bestDir for target, remove the bestSource.
         LOG.info("bestDir="+bestDir.toString());
         sources.remove(bestSource);
-        bestSource.setFile(bestDir.getDir());
-        bestSource.setFileSize(bestDir.getSize());
-        target.setFile(target.chooseTargetSubdir());
+        //TODO: check remove iteration
+        j.remove();
+        bestSource.setSubdir(bestDir);
+        bestSource.setSubdirSize(bestDir.getSize());
+        target.setSubdir(target.chooseTargetSubdir());
         //TODO: add to pending move.
-        PendingMove move = new PendingMove(bestSource,target);
+        SubdirMove move = null;
+        if(this.simulateMode){
+          move = new SimulateSubdirMove(bestSource,target,this.iteration);
+        }else {
+          move = new SubdirMove(bestSource, target,this.iteration);
+        }
         dispatcher.addPendingMove(move);
+        this.beingMoved+=move.fromSubdirSize;
       }else{
         // suitable subdir for this target, by block
         // TODO: byblock
@@ -97,7 +111,7 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
   public long initAvgUsable(List<Volume> volumes) {
     LOG.info("Begin to initAvgUsable in VolumeUnbalancer...");
     this.avgUsableRatio = totalUsableSpace/totalCapacity;
-    String volumeReport = String.format("%.5f+/-%.5f",this.avgUsableRatio,this.threshold);
+    String volumeReport = String.format("%.3f+/-%.3f",this.avgUsableRatio*100,this.threshold*100);
     try{
       for(Volume v: volumes){
         double usableDiff = v.getAvailableSpaceRatio() - this.avgUsableRatio;
@@ -138,7 +152,7 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
           }
         }
         // report the usable diff with avg
-        volumeReport += String.format(" %+.5f",usableDiff);
+        volumeReport += String.format(" %+.3f%%",usableDiff*100);
       }
       System.out.println(volumeReport);
       logUsableCollections();
