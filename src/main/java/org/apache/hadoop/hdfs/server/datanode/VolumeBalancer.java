@@ -212,6 +212,10 @@ public class VolumeBalancer {
           //TODO: error occurred
           break;
         }
+        if(iteration>30){
+          // iteration is too much, finish it first.
+          done = false;
+        }
       }
       //waiting for move thead
       //long bytesMoved = futureOfDispatcher.get();
