@@ -7,6 +7,7 @@ import org.apache.log4j.Logger;
 
 import java.io.*;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Created by Jiessie on 10/3/15.
@@ -14,6 +15,7 @@ import java.util.List;
 public class SubdirMove {
 
   private static final Logger LOG = Logger.getLogger(SubdirMove.class);
+  protected static final int RETRY = 3;
   protected Subdir fromSubdir;// will be modified when adding to pendingMoveList
   protected Subdir toSubdir;
   protected Volume fromVolume;
@@ -24,6 +26,7 @@ public class SubdirMove {
   protected int iteration = 0;
   protected long currentCopiedBytes = 0;
   protected String status;
+  protected AtomicBoolean finished = new AtomicBoolean(false);
 
   public SubdirMove(){
   }
@@ -40,6 +43,7 @@ public class SubdirMove {
     this.currentCopiedBytes = 0;
     StringBuilder message = new StringBuilder(String.format("[%s]==>[%s]\t[%.2f%% of %s] ", this.fromSubdirFile, this.toSubdirFile, this.currentCopiedBytes * 100.0f / this.fromSubdirSize, FileUtils.byteCountToDisplaySize(this.fromSubdirSize)));
     this.status = message.toString();
+    this.finished = new AtomicBoolean(false);
   }
 
   public SubdirMove(SubdirMove move, int iteration){
@@ -54,10 +58,11 @@ public class SubdirMove {
     this.currentCopiedBytes = 0;
     StringBuilder message = new StringBuilder(String.format("[%s]==>[%s]\t[%.2f%% of %s] ",this.fromSubdirFile,this.toSubdirFile,this.currentCopiedBytes*100.0f/this.fromSubdirSize, StringUtils.byteDesc(this.fromSubdirSize)));
     this.status = message.toString();
+    this.finished = move.finished;
   }
 
   public String toString(){
-    return String.format("SubdirMove[%d]: fromVolume[%s],fromSubdir[%s],toVolume[%s],toSubdir[%s],iteration[%d]", this.fromSubdirSize, (this.fromVolume != null) ? this.fromVolume.toString() : "nullVolume", this.fromSubdirFile, (this.toVolume != null) ? this.toVolume.toString() : "nullVolume", this.toSubdirFile,this.iteration);
+    return String.format("SubdirMove[%d]: fromVolume[%s],fromSubdir[%s],toVolume[%s],toSubdir[%s],iteration[%d],finished[%s]", this.fromSubdirSize, (this.fromVolume != null) ? this.fromVolume.toString() : "nullVolume", this.fromSubdirFile, (this.toVolume != null) ? this.toVolume.toString() : "nullVolume", this.toSubdirFile,this.iteration,this.finished.toString());
   }
 
   public String getStatus() {
@@ -84,9 +89,20 @@ public class SubdirMove {
         //check and roll back.
         FileUtils.deleteDirectory(this.toSubdirFile);
       }
+
       // 2. if there is no expection , means copy successfully
-      FileUtils.deleteDirectory(this.fromSubdirFile);
-      LOG.info(this.toSubdirFile.getAbsolutePath()+" copied, and clean the fromsubdir "+ this.fromSubdirFile.getAbsolutePath());
+      int count = RETRY;
+      while(count>0) {
+        try {
+          FileUtils.deleteDirectory(this.fromSubdirFile);
+          LOG.info(this.toSubdirFile.getAbsolutePath() + " copied, and clean the fromsubdir " + this.fromSubdirFile.getAbsolutePath());
+          break;
+        } catch (IOException ex) {
+          //delete from failed.
+          LOG.error("delete failed:"+ this.fromSubdirFile.getAbsolutePath()+", retry="+count);
+          count--;
+        }
+      }
     }catch(Exception ex){
       LOG.error("failed to move"+ ExceptionUtils.getFullStackTrace(ex));
     }

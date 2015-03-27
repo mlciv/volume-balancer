@@ -33,13 +33,12 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
   @Override
   public long chooseToMovePairs(Dispatcher dispatcher) {
 
+    //change thresholdAbove to farAbove
     chooseToMovePairs(thresholdAboveUnbalanceAvgUsable, thresholdBelowUnbalanceAvgUsable, dispatcher);
 
     chooseToMovePairs(thresholdAboveUnbalanceAvgUsable, farBelowUnbalanceAvgUsbale, dispatcher);
 
-    chooseToMovePairs(farAboveUnbalanceAvgUsable,thresholdBelowUnbalanceAvgUsable, dispatcher);
-
-    chooseToMovePairs(farAboveUnbalanceAvgUsable,farBelowUnbalanceAvgUsbale, dispatcher);
+    //if already beyond the threshold, move as few as possible. farAbove and farBelow should never become the source.
 
     return this.beingMoved;
   }
@@ -54,7 +53,7 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
 
   @Override
   protected void chooseToMovePairs(TreeSet<Source> sources, TreeSet<Target> candidates, Dispatcher dispatcher) {
-    // let below more below, above more above
+    // change thresholdBelow  to farBelow, change thresholdAbove to farAbove
     //target should sortedBy AvgMove descending
     //TODO: If descending, then one of the bigger one will become largest one, and the largest one, which is not suitable for balance paralltest
     //using ascending order
@@ -110,6 +109,7 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
   @Override
   public long initAvgUsable(List<Volume> volumes) {
     LOG.info("Begin to initAvgUsable in VolumeUnbalancer...");
+    // change thresholdBelow  to farBelow, change thresholdAbove to farAbove,move as few as possible
     this.avgUsableRatio = totalUsableSpace/totalCapacity;
     String volumeReport = String.format("%.3f+/-%.3f",this.avgUsableRatio*100,this.threshold*100);
     try{
@@ -117,13 +117,13 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
         double usableDiff = v.getAvailableSpaceRatio() - this.avgUsableRatio;
         double thresholdDiff = Math.abs(usableDiff) - threshold;
         if(usableDiff >= 0){
+          //above to farAbove, as source
           long maxMove = v.getTotalCapacity() - v.getUsableSpace();
           long minMove = (long)(((this.avgUsableRatio + this.threshold)-v.getAvailableSpaceRatio())*v.getTotalCapacity());
-          long avgMove = minMove;
+          long avgMove = (maxMove+minMove)/2;
           v.setMaxMove(maxMove);
           v.setMinMove(minMove);
           v.setAvgMove(avgMove);
-          LOG.info("above:"+v.toString());
           Source source = new Source(v);
           if(thresholdDiff <= 0){
             //within threshold and above avg, adding to thresholdAboveUnbalanceAvgUsable
@@ -134,14 +134,13 @@ public class VolumeUnbalancerPolicy extends VolumeBalancerPolicy{
             farAboveUnbalanceAvgUsable.add(source);
           }
         }else {
-          //below AvgUsable , as fromSubdir, set the leastMove and mostMove Bytes
+          //below AvgUsable , as target, set the leastMove and mostMove Bytes
           long minMove = (long)(v.getUsableSpace()- v.getTotalCapacity()*(this.avgUsableRatio - this.threshold));
           long maxMove = v.getUsableSpace();
-          long avgMove = minMove;
+          long avgMove = (minMove+maxMove)/2;
           v.setMaxMove(maxMove);
           v.setMinMove(minMove);
           v.setAvgMove(avgMove);
-          LOG.info("below:"+v.toString());
           Target target = new Target(v);
           if(thresholdDiff <= 0){
             //within threshold and below avg, adding to thresholdBelowUnbalanceAvgUsable

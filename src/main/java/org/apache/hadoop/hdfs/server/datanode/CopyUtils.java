@@ -40,6 +40,9 @@ public class CopyUtils {
     if (srcDir.isDirectory() == false) {
       throw new IOException("Source '" + srcDir + "' exists but is not a directory");
     }
+    if (destDir.exists() == true) {
+      throw new IOException("Target '" + destDir + "' already exist");
+    }
     if (srcDir.getCanonicalPath().equals(destDir.getCanonicalPath())) {
       throw new IOException("Source '" + srcDir + "' and destination '" + destDir + "' are the same");
     }

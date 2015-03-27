@@ -165,14 +165,8 @@ public class VolumeBalancerPolicy {
      */
     chooseToMovePairs(farBelowAvgUsbale, thresholdAboveAvgUsable, dispatcher);
 
-    /* match each remaining farAbove (target) to
-     * thresholdBelow volume (fromSubdir).
-     * Note only underutilized datanodes that have not had that max bytes to
-     * move satisfied in step 1 are selected.
-     */
-    chooseToMovePairs(thresholdBelowAvgUsable,farAboveAvgUsable, dispatcher);
-
-    chooseToMovePairs(thresholdBelowAvgUsable,thresholdAboveAvgUsable, dispatcher);
+    //thresholdBelow will not move, for it may cause parrel problem when copying.
+    // what's more, it is no need to do that.
 
     return this.beingMoved;
   }
@@ -204,29 +198,18 @@ public class VolumeBalancerPolicy {
         if(subdir==null||subdir.getSize()==0){
           continue;
         }else{
-          if(subdir.getSize()<target.getVolume().getMaxMove()&&subdir.getSize()>target.getVolume().getMinMove()){
-            //within range
-            long diff = Math.abs(subdir.getSize()-target.getVolume().getAvgMove());
+          //1. subdir should not exceed the maxMove of source and target
+          if(subdir.getSize()<=target.getVolume().getMaxMove()&&subdir.getSize()<=source.getVolume().getMaxMove()){
+            //compare diff Max(sourceDiff ,targetDiff),return min
+            long diff = Math.max(Math.abs(subdir.getSize()-target.getVolume().getAvgMove()),Math.abs(subdir.getSize()-source.getVolume().getAvgMove()));
             if(diff<bestDiff){
-              //no matter bestDir is null, or within range
               bestDiff = diff;
               bestDir = subdir;
               bestSource = source;
             }
           }else {
-            // exceed the max and below the min, choose the least diff
-            long diff = Math.abs(subdir.getSize()-target.getVolume().getAvgMove());
-            if(bestDir==null){
-              bestDir = subdir;
-              bestDiff = diff;
-              bestSource = source;
-            }else{
-              if(diff<bestDiff){
-                bestDir = subdir;
-                bestDiff = diff;
-                bestSource = source;
-              }
-            }
+            //if exceeding the max of (source or target), we never copy file more and then back again.
+            continue;
           }
         }
       }

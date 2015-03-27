@@ -70,6 +70,7 @@ public class CopyRunner extends CopyProgressTracker implements Runnable {
           this.currentMove.currentCopiedBytes=0;
           long start = System.currentTimeMillis();
           currentMove.doMove(this);
+          currentMove.finished.compareAndSet(false,true);
           VolumeBalancerStatistics.getInstance().writeUndoLog(currentMove);
           LOG.info("move " + currentMove.fromSubdirFile.getAbsolutePath() + " to " + currentMove.toSubdirFile.getAbsolutePath() + " took " + (System.currentTimeMillis() - start)
                   + "ms" + "[" + currentMove.fromSubdirSize + "bytes] " + this.toString());

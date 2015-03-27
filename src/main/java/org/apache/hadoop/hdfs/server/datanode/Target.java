@@ -16,6 +16,11 @@ public class Target implements Comparable<Target>{
     this.subdir = null;
   }
 
+  public Target(Volume v, Subdir subdir){
+    this.volume = v;
+    this.subdir = subdir;
+  }
+
   public Volume getVolume() {
     return volume;
   }
@@ -67,7 +72,12 @@ public class Target implements Comparable<Target>{
 
   public Subdir chooseTargetSubdir(){
     Subdir subdirParent = getShuffledAvailableSubdirParentBFS();
-    if(subdirParent==null) return null;
+    if(subdirParent==null) {
+      return null;
+    }
+    else{
+      LOG.debug("subdirParent is " + subdirParent.getDir().getAbsolutePath());
+    }
     String subdirName = subdirParent.getAvailableSubdirName(DataStorage.BLOCK_SUBDIR_PREFIX,VolumeBalancer.maxBlocksPerDir);
     Subdir targetSubdir = new Subdir(new File(subdirParent.getDir(),subdirName),-1);
     targetSubdir.setParent(subdirParent);

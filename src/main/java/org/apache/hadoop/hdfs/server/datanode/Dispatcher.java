@@ -18,37 +18,49 @@ public class Dispatcher implements Callable<Long>{
   private static Dispatcher ourInstance = new Dispatcher();
   private int notChangedIterations = 0;
   private final static int MAX_NOT_CHANGED_ITERATIONS = 5;
-  public final static long DEFAULT_WAITING_TIME = 5000; //ms
+  public final static long DEFAULT_WAITING_TIME = 2000; //ms
   private CountDownLatch shutdownLatch;
-
-  public static Dispatcher getInstance() {
-    return ourInstance;
-  }
+  private AtomicBoolean simulateFinished;
 
   private ExecutorService moveExecutor;
   private int concurrency = -1;
   private List<SubdirMove> subdirMoveList=null;
   private List< ArrayList<SubdirMove>> subdirIterationList = new ArrayList<ArrayList<SubdirMove>>();
   private List<VolumeBalancer.Result> iterationResults = new ArrayList<VolumeBalancer.Result>();
+  /**
+   * record the moving subdirMove.
+   */
+  private List<SubdirMove> dispatchedButMovingList = null;
   private List<CopyRunner> copyRunners;
   private ScheduledExecutorService progressReporter;
   private AtomicInteger reportedLines;
   public final static int CHARS_PER_LINE = 120;
-  private AtomicBoolean run;
+  private AtomicBoolean run = new AtomicBoolean(false);
   private long bytesMoved;
-  private long bytesBeingMoved;
+  private long lastBytesMoved;
+
+
+  public static Dispatcher getInstance() {
+    return ourInstance;
+  }
+
+  public AtomicBoolean getRun() {
+    return run;
+  }
 
   public Dispatcher(){
     this.concurrency = 0;
     this.moveExecutor = null;
     this.progressReporter = null;
     this.reportedLines = new AtomicInteger(0);
-    this.run = new AtomicBoolean(true);
+    this.run = new AtomicBoolean(false);
+    this.simulateFinished = new AtomicBoolean(false);
     this.bytesMoved = 0;
-    this.bytesBeingMoved = 0;
+    this.lastBytesMoved = 0;
     this.notChangedIterations =0;
     this.copyRunners = new CopyOnWriteArrayList<CopyRunner>();
     this.subdirMoveList = new ArrayList<SubdirMove>();
+    this.dispatchedButMovingList = new ArrayList<SubdirMove>();
     this.subdirIterationList = new ArrayList<ArrayList<SubdirMove>>();
     this.iterationResults = new ArrayList<VolumeBalancer.Result>();
   }
@@ -58,23 +70,37 @@ public class Dispatcher implements Callable<Long>{
    * @param concurrency
    * @return
    */
-  public Dispatcher init(int concurrency,CountDownLatch shutdownLatch) {
+  public Dispatcher init(int concurrency,CountDownLatch shutdownLatch,AtomicBoolean simulateFinished) {
     this.concurrency = concurrency;
     this.moveExecutor = Executors.newFixedThreadPool(concurrency);
     this.progressReporter = Executors.newScheduledThreadPool(1);
     this.copyRunners = new CopyOnWriteArrayList<CopyRunner>();
     this.reportedLines = new AtomicInteger(0);
     this.bytesMoved = 0;
-    this.bytesBeingMoved = 0;
+    this.lastBytesMoved = 0;
     this.shutdownLatch = shutdownLatch;
     this.notChangedIterations = 0;
     this.subdirMoveList = new ArrayList<SubdirMove>();
     this.subdirIterationList = new ArrayList<ArrayList<SubdirMove>>();
     this.iterationResults = new ArrayList<VolumeBalancer.Result>();
+    this.dispatchedButMovingList = new ArrayList<SubdirMove>();
+    this.simulateFinished = simulateFinished;
+    this.run = new AtomicBoolean(false);
     return this;
   }
 
   public boolean shouldContinue(long dispatchBlockMoveBytes) throws InterruptedException {
+
+    if(this.dispatchedButMovingList!=null){
+      //remove finished subdirMove from dispacthedButMovingList
+      for(Iterator<SubdirMove> it = dispatchedButMovingList.iterator(); it.hasNext();){
+        SubdirMove move = it.next();
+        if(move.finished.get()){
+          it.remove();
+        }
+      }
+    }
+
     if (dispatchBlockMoveBytes > 0) {
       notChangedIterations = 0;
     } else {
@@ -82,7 +108,15 @@ public class Dispatcher implements Callable<Long>{
         LOG.warn("dispatcher is under initializing, should not get here");
         notChangedIterations =0;
         return true;
+      }else {
+        if (this.simulateFinished.get() && this.subdirMoveList.isEmpty()&&this.dispatchedButMovingList.isEmpty()) {
+          System.out.print("No block in pendingList can be dispatched after simulateFinished. Invoke gracefulShutdown\n");
+          reportedLines.addAndGet(1);
+          Thread.sleep(DEFAULT_WAITING_TIME);// waiting for reporter
+          return false;
+        }
       }
+
       notChangedIterations++;
       //no bytes have been moved, give a chance to accumulate copied bytes.
       Thread.sleep(DEFAULT_WAITING_TIME);
@@ -180,7 +214,7 @@ public class Dispatcher implements Callable<Long>{
 
                 if(move.currentCopiedBytes==0){
                   notStartedMove++;
-                }else if(move.currentCopiedBytes==move.fromSubdirSize){
+                }else if(move.finished.get()){
                   finishedMove++;
                 }else{
                   runningMove++;
@@ -208,8 +242,8 @@ public class Dispatcher implements Callable<Long>{
               LOG.info(String.format("Enter Iteration=%d, reportedLines = %d, byteAleadyMoved = %d",i,reportedLines.get(),result.bytesAlreadyMoved));
             }
             //TODO: add summary info
-            bytesBeingMoved = totalBytesBeingMoved;
-            System.out.print(String.format("Summary: Iteration[%d], BytesAlreadyMoved[%s], BytesBeingMoved[%s], [%d+%d+%d/%d]\n",iterationResults.size(), StringUtils.byteDesc(totalBytesMoved),StringUtils.byteDesc(totalBytesBeingMoved),finishedMove,runningMove,notStartedMove,finishedMove+runningMove+notStartedMove));
+            lastBytesMoved = totalBytesBeingMoved;
+            System.out.print(String.format("Summary: Iteration[%d], BytesAlreadyMoved[%s], BytesBeingMoved[%s], [%d+%d+%d/%d] \n",iterationResults.size(), StringUtils.byteDesc(totalBytesMoved),StringUtils.byteDesc(totalBytesBeingMoved),finishedMove,runningMove,notStartedMove,finishedMove+runningMove+notStartedMove));
             reportedLines.incrementAndGet();
             System.out.flush();
           }catch(Exception ex){
@@ -278,7 +312,7 @@ public class Dispatcher implements Callable<Long>{
     if(this.subdirMoveList.isEmpty()){
       //Waitfor Subdir to add
       //TODO:
-      LOG.info("subdirMoveList is empty, sleep for 5 seconds, and return");
+      LOG.info("subdirMoveList is empty, sleep for "+DEFAULT_WAITING_TIME+" seconds, and return");
       Thread.sleep(DEFAULT_WAITING_TIME);
     }else {
       for (Iterator<SubdirMove> it = subdirMoveList.iterator(); it.hasNext(); ) {
@@ -358,6 +392,7 @@ public class Dispatcher implements Callable<Long>{
           if (bestCopyRunner.addPendingMove(move)) {
             LOG.info(String.format("succeed to add SubdirMove[%s] into pendingMoveQueue of copyRunner[%s]", move, bestCopyRunner));
             it.remove();
+            this.dispatchedButMovingList.add(move);
           } else {
             LOG.warn(String.format("failed to add SubdirMove[%s] into pendingMoveQueue of copyRunner[%s]", move, bestCopyRunner));
           }
@@ -370,13 +405,13 @@ public class Dispatcher implements Callable<Long>{
       }
     }
     if(copyRunners==null) return 0;
-
-    long lastBytesMoved = bytesMoved;
-    bytesMoved = 0;
+    this.lastBytesMoved = this.bytesMoved;
+    long tempBytesMoved = 0;
     for(CopyRunner cp : copyRunners){
-      bytesMoved += cp.copiedTotalBytes;
+      tempBytesMoved += cp.copiedTotalBytes;
     }
-    return bytesMoved - lastBytesMoved;
+    this.bytesMoved = tempBytesMoved;
+    return this.bytesMoved - this.lastBytesMoved;
   }
 
 //  public long dispatchBlockMoves_old(VolumeBalancer vb) throws InterruptedException {
@@ -491,6 +526,10 @@ public class Dispatcher implements Callable<Long>{
     if(this.subdirIterationList!=null){
       this.subdirIterationList.clear();
       this.subdirIterationList = null;
+    }
+    if(this.dispatchedButMovingList!=null){
+      this.dispatchedButMovingList.clear();
+      this.dispatchedButMovingList = null;
     }
     this.reportedLines.getAndSet(0);
     this.run = new AtomicBoolean(true);

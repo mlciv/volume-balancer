@@ -16,19 +16,18 @@ public class VolumeUnbalancer extends VolumeBalancer{
 
   private VolumeUnbalancerPolicy vubPolicy;
 
-  public VolumeUnbalancer(double threshold,int concurrency, boolean simulateMode, boolean interative){
+  public VolumeUnbalancer(double threshold,int concurrency, boolean simulateMode){
     this.threshold = threshold;
     this.concurrency = concurrency;
     this.simulateMode = simulateMode;
-    this.interative = interative;
   }
 
-  public static int run(double threshold, int concurrency, boolean simulateMode, boolean interative)
+  public static int run(double threshold, int concurrency, boolean simulateMode)
   {
     LOG.info("start run volume unbalancer ...");
     boolean done = false;
     VolumeBalancerStatistics vbs = VolumeBalancerStatistics.getInstance();
-    final VolumeUnbalancer vub =  new VolumeUnbalancer(threshold,concurrency,simulateMode,interative);
+    final VolumeUnbalancer vub =  new VolumeUnbalancer(threshold,concurrency,simulateMode);
     vub.setVbStatistics(vbs);
     if(!vub.initAndUpdateVolumes()){
       LOG.fatal("Failed to initAndUpdateVolumes volume data, exit");

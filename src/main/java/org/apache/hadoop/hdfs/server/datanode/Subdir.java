@@ -1,5 +1,9 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
+import org.apache.commons.httpclient.util.ExceptionUtil;
+import org.apache.commons.lang.exception.ExceptionUtils;
+import org.apache.log4j.Logger;
+
 import java.io.File;
 import java.util.*;
 
@@ -7,6 +11,7 @@ import java.util.*;
  * Created by Jiessie on 11/3/15.
  */
 public class Subdir implements Comparable<Subdir>{
+  private static final Logger LOG = Logger.getLogger(Subdir.class);
 
   private long size = 0;
   private File dir;
@@ -103,16 +108,22 @@ public class Subdir implements Comparable<Subdir>{
 
   public String getAvailableSubdirName(final String subdirPrefix,final int maxBlocksPerDir){
     if(!hasAvailableSeat(maxBlocksPerDir)) return null;
-    if(this.child==null) return subdirPrefix+"0";
+    if(this.child==null) {
+      //should not be null
+      LOG.warn("child of subdir is null:"+this.getDir().getAbsolutePath());
+      return subdirPrefix + "0";
+    }
     else{
+      LOG.info(String.format("childNum of [%s] is %d",this.getDir().getAbsolutePath(),this.getChild().size()));
       int bitset[] = new int[maxBlocksPerDir];
       for(Subdir dir:this.child){
         String name = dir.getDir().getName();
         try {
           int index = Integer.parseInt(name.substring(subdirPrefix.length()));
+          LOG.debug("name is"+name+", index is "+ index);
           bitset[index] = 1;
         } catch (NumberFormatException e) {
-          // ignore
+          LOG.warn("parse failed for subdirName"+name +"exception:"+ ExceptionUtils.getFullStackTrace(e));
         }
       }
 

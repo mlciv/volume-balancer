@@ -41,7 +41,7 @@ public class Volume implements Comparable<Volume> {
   Volume(final URI uri) {
     this.uri = uri;
     this.usableSpace = -1;
-    this.rootDir = new Subdir(new File(new File(this.uri), Storage.STORAGE_DIR_CURRENT + "/"),-1);
+    this.rootDir = new Subdir(new File(new File(this.uri), Storage.STORAGE_DIR_CURRENT),-1);
     this.minMove = -1;
     this.maxMove = -1;
     this.avgMove = -1;
@@ -119,11 +119,9 @@ public class Volume implements Comparable<Volume> {
   public void init(){
     this.usableSpace = this.rootDir.getDir().getUsableSpace();
     this.rootDir.setSize(this.usableSpace);
+    this.rootDir.setParent(null);
     this.subdirSet.clear();
-    Subdir currentRootDir = new Subdir(this.getRootDir().getDir(),this.getUsableSpace());
-    // rootDir's parent == null
-    currentRootDir.setParent(null);
-    this.mirrorChildSubdirs(currentRootDir);
+    this.mirrorChildSubdirs(this.rootDir);
     LOG.info("volume initilzed usablespace and subdirSet");
   }
 
@@ -181,6 +179,26 @@ public class Volume implements Comparable<Volume> {
   @Override
   public String toString() {
     return "Volume Report: url={" + this.uri + "},"+String.format("UsableSpace=%12d, TotalSpace=%12d, AvailableSpaceRatio=%.12f, MinMove=%12d, MaxMove=%12d,AvgMove=%12d ", getUsableSpace(), getTotalCapacity(), getAvailableSpaceRatio(),getMinMove(),getMaxMove(),getAvgMove());
+  }
+
+  public Subdir findSubdir(String absolutePath){
+    if(this.getSubdirSet()==null){
+      return null;
+    }
+
+    if(this.getRootDir().getDir().getAbsolutePath().equals(absolutePath)){
+      return this.getRootDir();
+    }else {
+      for(Iterator<Subdir> it = this.getSubdirSet().iterator();it.hasNext();)
+      {
+        String path;
+        Subdir tmpdir = it.next();
+        if(tmpdir.getDir().getAbsolutePath().equals(absolutePath)){
+          return tmpdir;
+        }
+      }
+    }
+    return null;
   }
 
   @Override

@@ -17,6 +17,12 @@ public class Source implements Comparable<Source>{
      this.subdirSize = -1;
   }
 
+  public Source(Volume v, Subdir dir,long fileSize){
+    this.volume = v;
+    this.subdir = dir;
+    this.subdirSize = fileSize;
+  }
+
   public Volume getVolume() {
     return volume;
   }
@@ -92,7 +98,8 @@ public class Source implements Comparable<Source>{
 
   /**
    * Find a list of subdirs, the sum of their size is near size.
-   * for Greedy policy, choose the nearsest Size, but not exceed the maxSize
+   * for Greedy policy, choose the nearsest Size, not exceed the max
+   * of both source and target
    * 1. target.min > maxDir cannot filled by only one dir, return maxDir
    * 2. more than one dir
    *     2.1 <minSubdir,maxSubdir> choose first in it
@@ -120,7 +127,7 @@ public class Source implements Comparable<Source>{
       if(LOG.isDebugEnabled()) {
         LOG.debug(String.format("TargetVolume[%s] cannot filled by one subdir,return maxDir[%s]", target.toString(), maxDir.toString()));
       }
-      // choose the max subdir for greedy.
+      // choose the max subdir for greedy.this maxDir < maxOftarget && maxDir < maxOfSource
       return maxDir;
     }else {
       // cannot fill with one subdir.
@@ -136,7 +143,7 @@ public class Source implements Comparable<Source>{
         }
         //TODO:
       }else{
-        // some subdir are less than size
+        // some subdir are within the range [minTarget, maxTarget],choose the nearst to minTarget
         // choose the least one, the first of suitableSet, for moving as few as possible.
         return suitableSet.first();
       }
