@@ -7,6 +7,7 @@ import org.apache.log4j.Logger;
 import java.io.IOException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Created by Jiessie on 13/3/15.
@@ -16,18 +17,19 @@ public class VolumeUnbalancer extends VolumeBalancer{
 
   private VolumeUnbalancerPolicy vubPolicy;
 
-  public VolumeUnbalancer(double threshold,int concurrency, boolean simulateMode){
+  public VolumeUnbalancer(double threshold,int concurrency, boolean simulateMode,AtomicBoolean globalRun){
     this.threshold = threshold;
     this.concurrency = concurrency;
     this.simulateMode = simulateMode;
+    this.globalRun = globalRun;
   }
 
-  public static int run(double threshold, int concurrency, boolean simulateMode)
+  public static int run(double threshold, int concurrency, boolean simulateMode, AtomicBoolean globalRun)
   {
-    LOG.info("start run volume unbalancer ...");
+    LOG.info("start globalRun volume unbalancer ...");
     boolean done = false;
     VolumeBalancerStatistics vbs = VolumeBalancerStatistics.getInstance();
-    final VolumeUnbalancer vub =  new VolumeUnbalancer(threshold,concurrency,simulateMode);
+    final VolumeUnbalancer vub =  new VolumeUnbalancer(threshold,concurrency,simulateMode,globalRun);
     vub.setVbStatistics(vbs);
     if(!vub.initAndUpdateVolumes()){
       LOG.fatal("Failed to initAndUpdateVolumes volume data, exit");
@@ -52,11 +54,11 @@ public class VolumeUnbalancer extends VolumeBalancer{
       //waiting for move thead
       //long bytesMoved = futureOfDispatcher.get();
       vub.gracefulShutdown();
-      LOG.info("stop run volume unbalancer ...");
+      LOG.info("stop globalRun volume unbalancer ...");
     }catch(Exception ex){
-      LOG.error("failed to run volume unbalancer"+ ExceptionUtils.getFullStackTrace(ex));
+      LOG.error("failed to globalRun volume unbalancer"+ ExceptionUtils.getFullStackTrace(ex));
       vub.gracefulShutdown();
-      LOG.info("stop run volume balancer ...");
+      LOG.info("stop globalRun volume balancer ...");
     }
     return ExitStatus.SUCCESS.getExitCode();
   }

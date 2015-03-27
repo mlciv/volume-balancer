@@ -21,6 +21,7 @@ public class Dispatcher implements Callable<Long>{
   public final static long DEFAULT_WAITING_TIME = 2000; //ms
   private CountDownLatch shutdownLatch;
   private AtomicBoolean simulateFinished;
+  private AtomicBoolean globalRun;
 
   private ExecutorService moveExecutor;
   private int concurrency = -1;
@@ -54,6 +55,7 @@ public class Dispatcher implements Callable<Long>{
     this.progressReporter = null;
     this.reportedLines = new AtomicInteger(0);
     this.run = new AtomicBoolean(false);
+    this.globalRun = new AtomicBoolean(false);
     this.simulateFinished = new AtomicBoolean(false);
     this.bytesMoved = 0;
     this.lastBytesMoved = 0;
@@ -70,7 +72,7 @@ public class Dispatcher implements Callable<Long>{
    * @param concurrency
    * @return
    */
-  public Dispatcher init(int concurrency,CountDownLatch shutdownLatch,AtomicBoolean simulateFinished) {
+  public Dispatcher init(int concurrency,CountDownLatch shutdownLatch,AtomicBoolean simulateFinished,AtomicBoolean globalRun) {
     this.concurrency = concurrency;
     this.moveExecutor = Executors.newFixedThreadPool(concurrency);
     this.progressReporter = Executors.newScheduledThreadPool(1);
@@ -86,6 +88,7 @@ public class Dispatcher implements Callable<Long>{
     this.dispatchedButMovingList = new ArrayList<SubdirMove>();
     this.simulateFinished = simulateFinished;
     this.run = new AtomicBoolean(false);
+    this.globalRun = globalRun;
     return this;
   }
 
@@ -252,14 +255,14 @@ public class Dispatcher implements Callable<Long>{
         }
       }, 5, 2, TimeUnit.SECONDS);
 
-      while (run.get()) {
+      while (run.get()&&globalRun.get()) {
         if(!shouldContinue(dispatchBlockMoves())){
           gracefulShutdown();
           LOG.info("stop dispatcher ...");
           return new Long(bytesMoved);
         }
       }
-      if(!run.get()){
+      if(!(run.get()&&globalRun.get())){
         gracefulShutdown();
         LOG.info("stop dispatcher ...");
         return new Long(bytesMoved);
@@ -312,7 +315,7 @@ public class Dispatcher implements Callable<Long>{
     if(this.subdirMoveList.isEmpty()){
       //Waitfor Subdir to add
       //TODO:
-      LOG.info("subdirMoveList is empty, sleep for "+DEFAULT_WAITING_TIME+" seconds, and return");
+      LOG.info("subdirMoveList is empty, sleep for "+DEFAULT_WAITING_TIME+" milliseconds, and return");
       Thread.sleep(DEFAULT_WAITING_TIME);
     }else {
       for (Iterator<SubdirMove> it = subdirMoveList.iterator(); it.hasNext(); ) {
@@ -377,7 +380,7 @@ public class Dispatcher implements Callable<Long>{
                 }
 
                 //2.2.  not conflict with current move and pendingMove, can keep it, it will reset by other conflict one, if there is no conflict
-                // with others then just run it
+                // with others then just globalRun it
                 if(temp<leastToBeCopied) {
                   bestCopyRunner = cp;
                   leastToBeCopied = temp;
@@ -448,7 +451,7 @@ public class Dispatcher implements Callable<Long>{
 //
 //    progressReporter.scheduleWithFixedDelay(new Runnable() {
 //      @Override
-//      public void run() {
+//      public void globalRun() {
 //        if(subdirMoveList ==null|| subdirMoveList.size()==0) return;
 //
 //        if(reportedLines!=0){

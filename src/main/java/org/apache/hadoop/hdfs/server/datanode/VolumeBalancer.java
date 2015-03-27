@@ -59,6 +59,7 @@ public class VolumeBalancer {
   protected int concurrency = DEFAULT_CONCURRENCY;
   protected boolean simulateMode = true;
   protected AtomicBoolean simulateFinished = new AtomicBoolean(false);
+  protected AtomicBoolean globalRun = new AtomicBoolean(false);
   protected static int maxBlocksPerDir = 64;
   protected VolumeBalancerPolicy vbPolicy;
   protected VolumeBalancerStatistics vbStatistics;
@@ -67,11 +68,12 @@ public class VolumeBalancer {
   protected final ExecutorService dispachterService = Executors.newFixedThreadPool(1);
   protected Future<Long> dispatcherFuture;
 
-  public VolumeBalancer(double threshold,int concurrency, boolean simulateMode){
+  public VolumeBalancer(double threshold,int concurrency, boolean simulateMode,AtomicBoolean globalRun){
     this.threshold = threshold;
     this.concurrency = concurrency;
     this.simulateMode = simulateMode;
     this.dispatcherFuture = null;
+    this.globalRun = globalRun;
   }
 
   public VolumeBalancer(){
@@ -110,7 +112,7 @@ public class VolumeBalancer {
       }
 
       this.concurrency = Math.min(concurrency, (dataDirs.size()+1)/2);
-      this.dispatcher = Dispatcher.getInstance().init(this.concurrency,shutdownLatch,simulateFinished);
+      this.dispatcher = Dispatcher.getInstance().init(this.concurrency,shutdownLatch,simulateFinished,this.globalRun);
       this.dispatcherFuture = null;
 
       LOG.info("Threshold = " + threshold + ", simulateMode = " + simulateMode + ", Concurrency is " + concurrency);
@@ -185,10 +187,10 @@ public class VolumeBalancer {
   }
 
 
-  public static int run(double threshold, int concurrency, boolean simulateMode){
-    LOG.info("start run volume balancer ...");
+  public static int run(double threshold, int concurrency, boolean simulateMode,AtomicBoolean globalRun){
+    LOG.info("start globalRun volume balancer ...");
     boolean done = false;
-    final VolumeBalancer vb = new VolumeBalancer(threshold,concurrency,simulateMode);
+    final VolumeBalancer vb = new VolumeBalancer(threshold,concurrency,simulateMode,globalRun);
     VolumeBalancerStatistics vbs = VolumeBalancerStatistics.getInstance();
     vb.setVbStatistics(vbs);
     //get allVolumes at start for only once, later are simulate
@@ -223,11 +225,11 @@ public class VolumeBalancer {
       //long bytesMoved = futureOfDispatcher.get();
       //TODO: check volumes status now.
       vb.gracefulShutdown();
-      LOG.info("stop run volume balancer ...");
+      LOG.info("stop globalRun volume balancer ...");
     }catch(Exception ex){
-      LOG.error("failed to run volume balancer,please rollback with -rollback undo.log"+ ExceptionUtils.getFullStackTrace(ex));
+      LOG.error("failed to globalRun volume balancer,please rollback with -rollback undo.log"+ ExceptionUtils.getFullStackTrace(ex));
       vb.gracefulShutdown();
-      LOG.info("stop run volume balancer ...");
+      LOG.info("stop globalRun volume balancer ...");
     }
     return ExitStatus.SUCCESS.getExitCode();
   }
@@ -248,7 +250,7 @@ public class VolumeBalancer {
         //for simulateMode, the statistic info changed by unbalance will be used by the later balance.
         VolumeBalancerStatistics.getInstance().reset();
         //for realMode, this will reset and get the real data for balance check
-        final VolumeBalancer vb = new VolumeBalancer(threshold, concurrency, simulateMode);
+        final VolumeBalancer vb = new VolumeBalancer(threshold, concurrency, simulateMode,globalRun);
         VolumeBalancerStatistics vbs = VolumeBalancerStatistics.getInstance();
         vb.setVbStatistics(vbs);
         //get allVolumes at start for only once, later are simulate
@@ -372,27 +374,32 @@ public class VolumeBalancer {
         System.exit(2);
       }
     }
+
+    final CountDownLatch processShutdownLatch = new CountDownLatch(1);
+    final AtomicBoolean globalRun = new AtomicBoolean(true);
+    Runtime.getRuntime().addShutdownHook(new WaitForProperShutdown(processShutdownLatch, globalRun));
     if (rollBackFile != null) {
-      VolumeBalancer.rollback(rollBackFile,threshold,concurrency,simulateMode);
+      VolumeBalancer.rollback(rollBackFile,threshold,concurrency,simulateMode,globalRun);
     } else if(unbalance||balance){
       if (unbalance) {
-        VolumeUnbalancer.run(threshold, concurrency, simulateMode);
+        VolumeUnbalancer.run(threshold, concurrency, simulateMode,globalRun);
       }
       if(balance) {
-        VolumeBalancer.run(threshold, concurrency, simulateMode);
+        VolumeBalancer.run(threshold, concurrency, simulateMode,globalRun);
       }
     }else{
       System.out.println("at lest one option of -unbalance|-balance|-rollback");
       System.exit(2);
     }
+    processShutdownLatch.countDown();
   }
 
-  public static void rollback(File rollBackFile,double threshold, int concurrency,boolean simulateMode){
+  public static void rollback(File rollBackFile,double threshold, int concurrency,boolean simulateMode,AtomicBoolean globalRun){
     if(rollBackFile==null) return ;
     else{
       if(!rollBackFile.exists()) return ;
       else{
-        VolumeBalancer vb = new VolumeBalancer(threshold,concurrency,simulateMode);
+        VolumeBalancer vb = new VolumeBalancer(threshold,concurrency,simulateMode,globalRun);
         VolumeBalancerStatistics vbs = VolumeBalancerStatistics.getInstance();
         vb.setVbStatistics(vbs);
         //get allVolumes at start for only once, later are simulate
@@ -400,9 +407,9 @@ public class VolumeBalancer {
           LOG.fatal("Failed to initAndUpdateVolumes volume data, exit");
           System.exit(3);
         }
-        vb.dispatcher = Dispatcher.getInstance().init(concurrency,vb.shutdownLatch,vb.simulateFinished);
+        vb.dispatcher = Dispatcher.getInstance().init(concurrency,vb.shutdownLatch,vb.simulateFinished,globalRun);
         try {
-          List<SubdirMove> subdirRollbackList=null;
+          List<SubdirMove> subdirRollbackList= null;
           subdirRollbackList = vbs.loadRollBackMoves(rollBackFile);
           if(subdirRollbackList==null|| subdirRollbackList.isEmpty()){
             throw new IOException("empty or null subdirRollbacklist");
@@ -417,7 +424,7 @@ public class VolumeBalancer {
             bytesMoved+=subdirRollbackList.get(j).fromSubdirSize;
             //no iteration record, just one iteration to continue.
           }
-          vb.dispatcher.addIterationResult(vb.newResult(ExitStatus.IN_PROGRESS, bytesMoved, bytesMoved,0));
+          vb.dispatcher.addIterationResult(vb.newResult(ExitStatus.IN_PROGRESS, bytesMoved, bytesMoved, 0));
           vb.dispatcherFuture = vb.dispachterService.submit(vb.dispatcher);
           vb.gracefulShutdown();
           LOG.info("rollback succeed");
@@ -425,6 +432,29 @@ public class VolumeBalancer {
           LOG.info("rollback failed, waiting for graceful shutdown "+ ExceptionUtils.getFullStackTrace(ex));
           vb.gracefulShutdown();
         }
+      }
+    }
+  }
+
+  private static class WaitForProperShutdown extends Thread {
+    private final CountDownLatch shutdownLatch;
+    private final AtomicBoolean globalRun;
+
+    public WaitForProperShutdown(CountDownLatch l, AtomicBoolean b) {
+      this.shutdownLatch = l;
+      this.globalRun = b;
+    }
+
+    @Override
+    public void run() {
+      System.out.print("Shutdown caught. We'll finish the current move and shutdown.");
+      LOG.info("Shutdown caught. We'll finish the current move and shutdown.");
+      globalRun.set(false);
+      try {
+        shutdownLatch.await();
+      }
+      catch (InterruptedException e) {
+        // well, we want to shutdown anyway :)
       }
     }
   }
